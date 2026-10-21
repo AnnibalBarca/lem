@@ -1,0 +1,10 @@
+{
+  "_doc": "Hiérarchie des domaines : macro-domaine → sous-domaines. Les étiquettes du Wiktionnaire sont rattachées ici (minuscules, sans parenthèses). Une étiquette inconnue devient un domaine racine.",
+  "langage": ["linguistique", "grammaire", "rhétorique", "littérature", "poésie", "lexicographie", "typographie"],
+  "science": ["chimie", "biochimie", "biologie", "botanique", "zoologie", "physique", "mathématiques", "géométrie", "astronomie", "géologie", "minéralogie", "médecine", "anatomie", "pathologie", "pharmacologie", "virologie", "génétique", "écologie", "métallurgie", "informatique", "statistiques", "météorologie", "physiologie"],
+  "technique": ["mécanique", "électricité", "électronique", "menuiserie", "charpenterie", "maçonnerie", "architecture", "construction", "industrie", "textile", "imprimerie", "aéronautique", "automobile", "marine", "navigation"],
+  "société": ["droit", "politique", "économie", "finance", "commerce", "administration", "religion", "christianisme", "militaire", "sociologie", "éducation"],
+  "humanités": ["histoire", "antiquité", "préhistoire", "philosophie", "psychologie", "mythologie", "archéologie", "géographie"],
+  "arts": ["théâtre", "musique", "peinture", "sculpture", "cinéma", "danse", "beaux-arts"],
+  "vie pratique": ["cuisine", "gastronomie", "fromage", "agriculture", "pêche", "chasse", "jardinage", "habillement", "sport", "jeux"]
+}

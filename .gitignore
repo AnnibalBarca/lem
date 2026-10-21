@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+*.egg-info/
+dist/
+# données locales : dictionnaires téléchargés, base, vecteurs
+/data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.npy
