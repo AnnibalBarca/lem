@@ -43,7 +43,7 @@
     {"forme": "synchrone", "pos": "adj", "origine": "grec", "morphemes": [["syn-", "avec"], ["chrono-", "temps"]],
      "sens": [{"definition": "Qui se produit en même temps.", "domaines": ["physique"]}]},
 
-    {"forme": "thuriféraire", "pos": "nom", "origine": "latin", "formes": ["thuriféraires", "turiféraire"],
+    {"forme": "thuriféraire", "pos": "nom", "origine": "latin", "formes": ["thuriféraires"],
      "sens": [{"definition": "Flatteur, admirateur zélé qui encense quelqu'un.", "registre": "littéraire"},
               {"definition": "Clerc qui porte l'encensoir dans les cérémonies religieuses.", "domaines": ["religion"]}]},
     {"forme": "atrabilaire", "pos": "adj", "origine": "latin", "formes": ["atrabilaires"],
@@ -125,7 +125,7 @@
     {"forme": "clepsydre", "pos": "nom", "origine": "grec",
      "sens": [{"definition": "Horloge antique qui mesure le temps par l'écoulement régulier de l'eau.", "domaines": ["antiquité"]}]},
 
-    {"forme": "kjökkenmödding", "pos": "nom", "type": "etranger", "origine": "danois", "formes": ["kjökkenmöddings", "kjøkkenmødding"],
+    {"forme": "kjökkenmödding", "pos": "nom", "type": "etranger", "origine": "danois", "formes": ["kjökkenmöddings"],
      "sens": [{"definition": "Amas préhistorique de coquillages et de déchets de cuisine.", "domaines": ["préhistoire"]}]},
     {"forme": "vaudeville", "pos": "nom", "origine": "francais",
      "sens": [{"definition": "Comédie légère fondée sur l'intrigue et les quiproquos.", "domaines": ["théâtre"]}]},
@@ -152,7 +152,19 @@
     {"forme": "astronome", "pos": "nom", "origine": "grec", "formes": ["astronomes"], "sens": [{"definition": "Scientifique qui étudie les astres.", "domaines": ["astronomie"]}]},
     {"forme": "chronomètre", "pos": "nom", "origine": "grec", "morphemes": [["chrono-", "temps"], ["-mètre", "mesure"]], "formes": ["chronomètres"], "sens": [{"definition": "Montre de précision qui mesure des durées."}]},
     {"forme": "homme", "pos": "nom", "origine": "latin", "formes": ["hommes"], "sens": [{"definition": "Être humain ; individu de sexe masculin."}]},
-    {"forme": "téléphone", "pos": "nom", "origine": "grec", "formes": ["téléphones"], "sens": [{"definition": "Appareil qui transmet la parole à distance."}]}
+    {"forme": "téléphone", "pos": "nom", "origine": "grec", "formes": ["téléphones"], "sens": [{"definition": "Appareil qui transmet la parole à distance."}]},
+    {"forme": "appeler", "pos": "verbe", "origine": "latin", "formes": ["appelle", "appelles", "appelons", "appelez", "appellent", "appelait", "appelé", "appelée", "appellera"],
+     "sens": [{"definition": "Nommer quelqu'un ou l'inviter à venir en prononçant son nom."}]},
+    {"forme": "occurrence", "pos": "nom", "origine": "latin", "formes": ["occurrences"],
+     "sens": [{"definition": "Fait de se produire ; chaque apparition d'un élément dans un texte ou une série.", "domaines": ["linguistique"]}]},
+    {"forme": "rythme", "pos": "nom", "origine": "grec", "formes": ["rythmes"],
+     "sens": [{"definition": "Retour régulier, dans le temps, d'un phénomène ou d'un temps fort.", "domaines": ["musique"]}]},
+    {"forme": "hémorragie", "pos": "nom", "origine": "grec", "formes": ["hémorragies"],
+     "sens": [{"definition": "Écoulement de sang hors d'un vaisseau sanguin.", "domaines": ["médecine"]}]},
+    {"forme": "dilemme", "pos": "nom", "origine": "grec", "formes": ["dilemmes"],
+     "sens": [{"definition": "Choix obligé entre deux possibilités également insatisfaisantes."}]},
+    {"forme": "connexion", "pos": "nom", "origine": "latin", "formes": ["connexions"],
+     "sens": [{"definition": "Action de relier ; liaison entre des éléments."}]}
   ],
   "relations": [
     ["thuriféraire", "laudateur", "synonyme"], ["thuriféraire", "flatteur", "synonyme"],

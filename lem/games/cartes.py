@@ -1,6 +1,9 @@
 """Cartes (façon Anki), avec notation en direct puis différée.
 
 Exercices
+  graphie        : une de tes fautes revient : la définition est montrée, tu dois écrire le mot
+                   EXACTEMENT. Toute faute (dans n'importe quel exercice) crée cette trace et la
+                   carte revient trois cartes plus loin, puis à intervalles espacés.
   recep          : le MOT est montré → tu écris sa définition, en texte libre OU en synonymes
                    (« flatteur, laudateur »). Notation bge-m3 immédiate (température, dictionnaire
                    inversé), puis Claude/Jev en fin de session.
@@ -26,6 +29,7 @@ from lem.grading.direct import VerdictProd, VerdictRecep, noter_prod, noter_rece
 from lem.journal import Evenement, Frappe, ajouter_notation, ecrire
 from lem.memory import scheduler
 from lem.memory.knowledge import Y_PAR_NOTE, CarteConnaissance, score_apprentissage
+from lem.orthographe import Diagnostic, diagnostiquer, enregistrer_faute
 
 CARTES = enregistrer(Jeu(
     id="cartes",
@@ -36,6 +40,7 @@ CARTES = enregistrer(Jeu(
         Param("exercice", "Exercice", str, "mixte", "recep | prod | mixte",
               choix=("recep", "prod", "mixte")),
         Param("confusables", "Duels de confusables", bool, True, "ajoute des duels après chaque mot nouveau"),
+        Param("graphie", "Reprise des fautes de graphie", bool, True, "tes fautes reviennent jusqu'à être justes"),
         Param("nouveaux", "Mots nouveaux", int, 10, "", 0, 200),
         Param("revisions_max", "Révisions max", int, 100, "", 0, 2000),
         *PARAMS_FILTRES,
@@ -45,7 +50,7 @@ CARTES = enregistrer(Jeu(
 
 @dataclass
 class Item:
-    exercice: str                 # recep | prod | discrimination
+    exercice: str                 # recep | prod | discrimination | graphie
     entree_id: int
     sens_id: int
     forme: str
@@ -68,6 +73,7 @@ class Resultat:
     recep: VerdictRecep | None = None
     prod: VerdictProd | None = None
     sens: list[tuple[int, str]] = field(default_factory=list)
+    fautes: list[Diagnostic] = field(default_factory=list)    # à retaper juste avant de continuer
 
 
 class PartieCartes:
@@ -109,10 +115,12 @@ class PartieCartes:
         vivier = selectionner(self.con, f)
         ids = {r["id"] for r in vivier} if filtre_actif else None
         traces = ("recep", "prod") if p["exercice"] == "mixte" else (p["exercice"],)
+        if p.get("graphie", True):
+            traces = (*traces, "ortho")
 
         items: list[Item] = []
         for t in scheduler.dues(self.con, limite=p["revisions_max"], traces=traces, entree_ids=ids):
-            it = self._item(t.trace, t.entree_id, t.sens_id)
+            it = self._item("graphie" if t.trace == "ortho" else t.trace, t.entree_id, t.sens_id)
             if it:
                 items.append(it)
 
@@ -185,7 +193,16 @@ class PartieCartes:
                 self.con.execute("SELECT id, definition FROM sens WHERE entree_id = ? ORDER BY rang", (it.entree_id,))]
         data = {"exercice": it.exercice, "voisins": it.voisins, "indices": it.indices, "nouveau": it.nouveau}
         recep = prod = None
-        if it.exercice == "recep":
+        fautes: list[Diagnostic] = []
+        if it.exercice == "graphie":
+            correct = texte.strip().lower() == it.forme.lower()
+            note = 3 if correct and not it.indices else 1
+            trace = "ortho"
+            diag = None if correct else diagnostiquer(self.con, texte, cible_id=it.entree_id)
+            data["graphie"] = diag.resume() if diag else None
+            if not correct:
+                fautes.append(diag or Diagnostic(texte, it.forme, it.entree_id, -1, ["inconnu"], False, 0.0))
+        elif it.exercice == "recep":
             recep = noter_recep(self.con, it.entree_id, texte, self.embedder, self.magasin_sens, self.magasin_entrees)
             note, correct = recep.note_auto, None if recep.note_auto is None else recep.note_auto >= 2
             data.update({"temperature": recep.temperature, "sens_vise_id": recep.sens_vise_id,
@@ -199,6 +216,8 @@ class PartieCartes:
                 note = min(note, 2 if it.indices <= len(it.forme) // 3 else 1)
             data.update({"mode": prod.mode, "proximite": prod.comparaison.proximite.value if prod.comparaison else None})
             trace = "prod"
+            if prod.graphie:
+                fautes.append(prod.graphie)
         else:
             choisi = None
             try:
@@ -211,16 +230,38 @@ class PartieCartes:
             data.update({"options": [o[1] for o in it.options], "choisi": choisi})
             trace = "prod"
             data["fsrs"] = False   # un duel informe la carte de connaissance, pas FSRS
+        if recep:
+            fautes += recep.fautes
         eid = ecrire(self.con, self.session_id, Evenement(
-            "cartes", "reponse", entree_id=it.entree_id, sens_id=it.sens_id, trace=trace, reponse=texte,
-            correct=correct, note_auto=note, latence_ms=latence_ms, frappe=frappe, data=data))
+            "cartes", "reponse", entree_id=it.entree_id, sens_id=0 if trace == "ortho" else it.sens_id, trace=trace,
+            reponse=texte, correct=correct, note_auto=note, latence_ms=latence_ms, frappe=frappe, data=data))
+        for d in fautes:
+            if it.exercice != "graphie":          # en exercice graphie, la réponse elle-même est la trace ortho
+                enregistrer_faute(self.con, self.session_id, "cartes", d)
+            self._insister(d)
         if it.exercice == "prod" and prod and not prod.correct and prod.entree_donnee:
             from lem.similarite import enregistrer_confusion
             enregistrer_confusion(self.con, it.entree_id, prod.entree_donnee)
         if it.exercice == "discrimination" and not correct and data.get("choisi"):
             from lem.similarite import enregistrer_confusion
             enregistrer_confusion(self.con, it.entree_id, data["choisi"])
-        return Resultat(it, texte, correct, note, eid, recep, prod, sens)
+        return Resultat(it, texte, correct, note, eid, recep, prod, sens, fautes)
+
+    def _insister(self, d: Diagnostic) -> None:
+        """Remet le mot mal écrit trois cartes plus loin (une seule fois par session et par mot)."""
+        if any(x.exercice == "graphie" and x.entree_id == d.entree_id for x in self.file):
+            return
+        it = self._item("graphie", d.entree_id)
+        if it:
+            self.file.insert(min(3, len(self.file)), it)
+
+    def recopier(self, res: Resultat, attendu: str, texte: str, latence_ms: int) -> bool:
+        """Après une faute : tu retapes la bonne graphie. Journalisé, hors FSRS."""
+        ok = texte.strip() == attendu or texte.strip().lower() == attendu.lower()
+        ecrire(self.con, self.session_id, Evenement(
+            "cartes", "recopie", entree_id=res.item.entree_id, reponse=texte, correct=ok, latence_ms=latence_ms,
+            data={"attendu": attendu, "fsrs": False}))
+        return ok
 
     def valider(self, res: Resultat, note_soi: int | None = None) -> None:
         """Clôt une carte : auto-évaluation éventuelle, carte de connaissance, FSRS."""
@@ -228,10 +269,10 @@ class PartieCartes:
         if note_soi is not None:
             ajouter_notation(self.con, res.evenement_id, "soi", note=note_soi,
                              brut={"proposee": res.note_proposee})
-        if note is not None:
+        if note is not None and res.item.exercice != "graphie":   # la graphie n'informe pas le sens
             self.carte.observer(res.item.entree_id, Y_PAR_NOTE[note])
         if res.item.exercice != "discrimination":
-            scheduler.reconstruire(self.con, [res.item.entree_id])
+            scheduler.reconstruire(self.con, [res.item.entree_id, *{d.entree_id for d in res.fautes}])
 
     def restant(self) -> int:
         return len(self.file)

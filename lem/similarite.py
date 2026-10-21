@@ -21,7 +21,7 @@ from enum import Enum
 
 from rapidfuzz.distance import Levenshtein
 
-from lem.db import ajouter_relation
+from lem.db import ajouter_relation, get_reglage
 from lem.texte import normaliser, sans_accents  # noqa: F401  (ré-exportés)
 
 
@@ -125,5 +125,5 @@ def comparer(con: sqlite3.Connection, a: int, b: int, magasin=None, seuils: dict
     f = sim_forme(ra["forme"], rb["forme"], ra["phon"], rb["phon"])
     s = magasin.sim(a, b) if magasin is not None else None
     mem = poids_confusion(con, a, b)
-    seuils = seuils or {}
+    seuils = seuils or get_reglage(con, "seuils_proximite", {})   # calibrés par `lem calibrer`
     return Comparaison(f, s, mem, etiqueter(f, s, mem, seuils.get("forme", SEUIL_FORME), seuils.get("sens", SEUIL_SENS)))

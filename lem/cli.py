@@ -2,9 +2,12 @@
 
   lem                      ouvre l'interface (menu des jeux)
   lem demo                 crée une base de démonstration (~80 mots) et l'ouvre
+  lem telecharger [S…]     télécharge les sources dans ~/.lem/sources (hors du dépôt) ;
+                           --ingerer enchaîne ingestion + prior
   lem ingest <source> F    lexique | wiktionnaire | jeuxdemots | wordfreq
   lem prior [--cible N]    calibre l'a priori « adulte cultivé » (N lemmes connus)
   lem index                calcule les vecteurs bge-m3 (Ollama) des sens et des entrées
+  lem calibrer             mesure les seuils (sens, température) sur la base réelle
   lem noter [--modele M]   notation différée par Claude Code headless (sonnet par défaut)
   lem rebuild              rejoue tout le journal (FSRS + carte de connaissance)
   lem atlas                imprime l'atlas dans le terminal
@@ -73,6 +76,42 @@ def cmd_ingest(args) -> None:
     print(f"{args.source} : {n} éléments")
 
 
+def cmd_telecharger(args) -> None:
+    from lem import ingest
+    from lem.ingest.telecharger import DOSSIER, SOURCES, telecharger
+
+    noms = args.sources or ["lexique", "wiktionnaire"]
+    chemins = {}
+    for nom in noms:
+        print(f"{SOURCES[nom].nom} — {SOURCES[nom].note}")
+        def prog(n, total):
+            print(f"  {n / 1e6:8.1f} Mo" + (f" / {total / 1e6:.1f}" if total else ""), end="\r", flush=True)
+        try:
+            chemins[nom] = telecharger(nom, args.url if len(noms) == 1 else None, progression=prog)
+            print(f"\n  → {chemins[nom]}")
+        except RuntimeError as exc:
+            print(f"\n{exc}")
+    print(f"dossier des sources : {DOSSIER} (hors du dépôt)")
+    if args.ingerer and chemins:
+        ctx = _ctx(args)
+        ingest.charger_domaines(ctx.con)
+        for nom in ("lexique", "wiktionnaire", "jeuxdemots"):
+            if nom in chemins:
+                f = {"lexique": ingest.lexique, "wiktionnaire": ingest.wiktionnaire, "jeuxdemots": ingest.jeuxdemots}[nom]
+                print(f"ingestion {nom} : {f(ctx.con, chemins[nom])}")
+        print(f"wordfreq : {ingest.zipf_wordfreq(ctx.con)}")
+        args.cible, args.pente = 45_000, 1.6
+        cmd_prior(args)
+
+
+def cmd_calibrer(args) -> None:
+    import json
+
+    from lem.calibrage import calibrer_seuils
+
+    print(json.dumps(calibrer_seuils(_ctx(args).con, args.modele_embedding), ensure_ascii=False, indent=2))
+
+
 def cmd_prior(args) -> None:
     from lem.memory.knowledge import ParamsPrior, calibrer
 
@@ -133,6 +172,14 @@ def main(argv: list[str] | None = None) -> None:
     i.add_argument("source", choices=["lexique", "wiktionnaire", "jeuxdemots", "wordfreq"])
     i.add_argument("fichier", nargs="?")
     i.set_defaults(f=cmd_ingest)
+    t = sp.add_parser("telecharger")
+    t.add_argument("sources", nargs="*", choices=["lexique", "wiktionnaire", "jeuxdemots"])
+    t.add_argument("--url", help="URL imposée (une seule source)")
+    t.add_argument("--ingerer", action="store_true", help="enchaîne ingestion, wordfreq et prior")
+    t.set_defaults(f=cmd_telecharger)
+    c = sp.add_parser("calibrer")
+    c.add_argument("--modele-embedding", default="bge-m3")
+    c.set_defaults(f=cmd_calibrer)
     p = sp.add_parser("prior")
     p.add_argument("--cible", type=float, default=45_000)
     p.add_argument("--pente", type=float, default=1.6)

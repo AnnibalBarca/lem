@@ -106,7 +106,8 @@ def test_prod_exact_flechi_et_confusion(con):
     v = noter_prod(con, a, "homonyme")
     assert not v.correct and v.comparaison.proximite == Proximite.FORME
     assert noter_prod(con, eid(con, "thuriféraire"), "laudateur").mode == "synonyme"
-    assert noter_prod(con, eid(con, "éminent"), "eminent").correct    # accents tolérés par défaut
+    v = noter_prod(con, eid(con, "éminent"), "eminent")                # aucune variante : accent manquant = faute
+    assert not v.correct and v.mode == "graphie" and v.graphie.types == ["accent"]
 
 
 def test_carte_connaissance_persistance(con):
@@ -146,3 +147,18 @@ def test_claude_headless_reponse_invalide_ignoree(con):
     n = ch.noter(con, "sonnet", appel=lambda p, m: "pas de json", journal=lambda m: None)
     assert n == 0
     assert con.execute("SELECT COUNT(*) FROM notation").fetchone()[0] == 0
+
+
+def test_calibrage_des_seuils(con, emb, magasins):
+    from lem.calibrage import calibrer_seuils
+    from lem.db import ajouter_relation, get_reglage
+
+    with pytest.raises(ValueError):
+        calibrer_seuils(con, emb.nom)
+    ids = [r[0] for r in con.execute("SELECT id FROM entree ORDER BY id")]
+    for a, b in zip(ids[::2], ids[1::2]):
+        ajouter_relation(con, a, b, "synonyme")
+    r = calibrer_seuils(con, emb.nom)
+    assert get_reglage(con, "seuils_proximite")["sens"] == r["proximite"]["sens"]
+    d = get_reglage(con, f"seuils_definition:{emb.nom}")
+    assert d["haut"] > d["bas"]

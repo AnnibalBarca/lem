@@ -31,9 +31,10 @@ def test_commandes_en_partie():
 
 
 def _mot_valide(partie, suite, sauf):
-    for fs in partie.formes_vivier.values():
-        for f in fs:
-            if suite in f and f not in sauf:
+    """Une forme EXACTE (accents compris) du vivier qui contient la suite."""
+    for eid in partie.formes_vivier:
+        for (f,) in partie.con.execute("SELECT forme FROM forme WHERE entree_id = ?", (eid,)):
+            if suite in normaliser(f) and normaliser(f) not in sauf:
                 return f
     return None
 
@@ -65,6 +66,9 @@ def test_bombe_rejette_mot_invalide_ou_reutilise(con, carte, rng):
     assert b.repondre(mot, 500).valide
     b.invite.suite = normaliser(mot)[:2]
     assert b.repondre(mot, 500).message == "déjà utilisé"
+    sans = normaliser(mot)
+    if sans != mot:                                   # mot accentué tapé sans accents : refusé
+        assert not b.repondre(sans, 500).valide
 
 
 def test_bombe_explosion_et_fin(con, carte, rng):

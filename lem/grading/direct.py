@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from lem.db import get_reglage
+from lem.orthographe import Diagnostic, diagnostiquer
 from lem.similarite import Comparaison, comparer, normaliser
 
 
@@ -31,15 +32,17 @@ class VerdictRecep:
     synonymes_reconnus: list[str] = field(default_factory=list)
     confusions: list[tuple[str, Comparaison]] = field(default_factory=list)
     note_auto: int | None = None
+    fautes: list[Diagnostic] = field(default_factory=list)   # fautes de graphie dans ta réponse
 
 
 @dataclass
 class VerdictProd:
     correct: bool
-    mode: str                              # exact | flechi | synonyme | inconnu | autre_mot
+    mode: str                              # exact | flechi | synonyme | graphie | autre_mot | inconnu
     entree_donnee: int | None
     comparaison: Comparaison | None
     note_auto: int
+    graphie: Diagnostic | None = None
 
 
 def seuils(con: sqlite3.Connection, modele: str) -> dict:
@@ -59,12 +62,34 @@ def decouper_synonymes(reponse: str) -> list[str] | None:
     return None
 
 
-def entrees_de_forme(con: sqlite3.Connection, forme: str, accents_stricts: bool = False) -> list[int]:
-    if accents_stricts:
-        rows = con.execute("SELECT DISTINCT entree_id FROM forme WHERE forme = ?", (forme.strip().lower(),))
-    else:
-        rows = con.execute("SELECT DISTINCT entree_id FROM forme WHERE norme = ?", (normaliser(forme),))
+def entrees_de_forme(con: sqlite3.Connection, forme: str) -> list[int]:
+    """Entrées dont `forme` est une forme EXACTE (casse mise à part). Aucune variante tolérée."""
+    rows = con.execute("SELECT DISTINCT entree_id FROM forme WHERE forme = ?", (forme.strip().lower(),))
     return [r[0] for r in rows]
+
+
+RE_MOT = re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿœæŒÆ]+(?:-[A-Za-zÀ-ÖØ-öø-ÿœæ]+)*")
+
+
+def fautes_dans(con: sqlite3.Connection, texte: str, confiance_min: float = 0.6) -> list[Diagnostic]:
+    """Repère les mots mal orthographiés d'un texte libre (définition, synonymes)."""
+    from wordfreq import zipf_frequency
+
+    out = []
+    for k, m in enumerate(RE_MOT.finditer(texte)):
+        tok = m.group(0)
+        if len(tok) < 3 or (k > 0 and tok[0].isupper()):
+            continue
+        if con.execute("SELECT 1 FROM forme WHERE forme = ? LIMIT 1", (tok.lower(),)).fetchone():
+            continue
+        accent_seul = con.execute("SELECT 1 FROM forme WHERE norme = ? LIMIT 1", (normaliser(tok),)).fetchone()
+        # Mot courant absent d'une base partielle : wordfreq le connaît, ce n'est pas une faute.
+        if not accent_seul and zipf_frequency(tok.lower(), "fr") >= 2.0:
+            continue
+        d = diagnostiquer(con, tok)
+        if d and d.confiance >= confiance_min:
+            out.append(d)
+    return out
 
 
 def synonymes(con: sqlite3.Connection, entree_id: int) -> set[int]:
@@ -82,6 +107,7 @@ def noter_recep(con: sqlite3.Connection, entree_id: int, reponse: str, embedder=
     reponse = reponse.strip()
     if not reponse or normaliser(reponse) in {"?", "je ne sais pas", "jsp", "aucune idee"}:
         return VerdictRecep(None, None, None, None, note_auto=1)
+    fautes = fautes_dans(con, reponse)
 
     syns_reconnus: list[str] = []
     confusions: list[tuple[str, Comparaison]] = []
@@ -99,7 +125,7 @@ def noter_recep(con: sqlite3.Connection, entree_id: int, reponse: str, embedder=
 
     if embedder is None or not getattr(embedder, "semantique", False) or magasin_sens is None or not len(magasin_sens):
         note = 3 if syns_reconnus else None
-        return VerdictRecep(None, None, None, None, syns_reconnus, confusions, note)
+        return VerdictRecep(None, None, None, None, syns_reconnus, confusions, note, fautes)
 
     s = seuils(con, embedder.nom)
     v = embedder.embed([reponse])[0]
@@ -127,19 +153,18 @@ def noter_recep(con: sqlite3.Connection, entree_id: int, reponse: str, embedder=
         note = 2
     else:
         note = 1
-    return VerdictRecep(t, sim_c, sens_vise, mot_reel, syns_reconnus, confusions, note)
+    return VerdictRecep(t, sim_c, sens_vise, mot_reel, syns_reconnus, confusions, note, fautes)
 
 
-def noter_prod(con: sqlite3.Connection, entree_id: int, reponse: str, magasin_entrees=None,
-               accents_stricts: bool = False) -> VerdictProd:
+def noter_prod(con: sqlite3.Connection, entree_id: int, reponse: str, magasin_entrees=None) -> VerdictProd:
+    """Sens → mot, graphie exacte exigée. Une faute sur le bon mot = mot retrouvé mais mal écrit."""
     reponse = reponse.strip()
     cible = con.execute("SELECT forme FROM entree WHERE id = ?", (entree_id,)).fetchone()["forme"]
     if not reponse:
         return VerdictProd(False, "inconnu", None, None, 1)
-    egal = (lambda a, b: a.lower() == b.lower()) if accents_stricts else (lambda a, b: normaliser(a) == normaliser(b))
-    if egal(reponse, cible):
+    if reponse.lower() == cible.lower():
         return VerdictProd(True, "exact", entree_id, None, 3)
-    ids = entrees_de_forme(con, reponse, accents_stricts)
+    ids = entrees_de_forme(con, reponse)
     if entree_id in ids:
         return VerdictProd(True, "flechi", entree_id, None, 3)
     syn = synonymes(con, entree_id)
@@ -149,4 +174,11 @@ def noter_prod(con: sqlite3.Connection, entree_id: int, reponse: str, magasin_en
     if ids:
         comp = comparer(con, entree_id, ids[0], magasin_entrees)
         return VerdictProd(False, "autre_mot", ids[0], comp, 1)
+    diag = diagnostiquer(con, reponse, cible_id=entree_id)
+    if diag and diag.entree_id == entree_id:
+        # Le mot est retrouvé (trace prod : « difficile »), mais la graphie est fausse (trace ortho : raté).
+        return VerdictProd(False, "graphie", entree_id, None, 2, diag)
+    if diag:
+        comp = comparer(con, entree_id, diag.entree_id, magasin_entrees)
+        return VerdictProd(False, "autre_mot", diag.entree_id, comp, 1, diag)
     return VerdictProd(False, "inconnu", None, None, 1)

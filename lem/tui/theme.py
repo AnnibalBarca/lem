@@ -1,8 +1,9 @@
 """La couleur ne sert qu'à signifier. Tout le reste est blanc, gris, noir.
 
-Trois usages seulement :
+Quatre usages seulement :
   * l'état de la mémoire (froid → chaud : inconnu → acquis) ;
   * la proximité entre deux mots (rouge, magenta, orange, violet) ;
+  * la graphie : jaune vif, réservé aux fautes d'orthographe (lem.orthographe.GRAPHIE) ;
   * les catégories (domaines), avec une teinte stable par nom.
 """
 

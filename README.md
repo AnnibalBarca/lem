@@ -31,6 +31,11 @@ ta mémoire.
 | **Étalonnage** | test adaptatif oui/non, avec pseudo-mots et vérifications | place ta carte de connaissance |
 | **Atlas** | ta carte, ton profil, ta signature d'imprécision, tes confusions, ta métacognition | — |
 
+**Graphie stricte.** Aucune variante n'est acceptée, accents compris. Chaque faute est identifiée
+(accent, consonne double, h muet, inversion, touche voisine…), classée (orthographe ou frappe),
+montrée lettre par lettre en jaune, et le mot doit être retapé juste. Il revient ensuite trois cartes
+plus loin, puis à intervalles espacés, sur une trace FSRS dédiée.
+
 Dans tous les jeux : `/aide`, `/domaine science,droit`, `/etat flous`, `/vies 5`, `/mode confusables`, `/params`…
 Les réglages sont enregistrés dans la base.
 
@@ -45,23 +50,21 @@ lem demo                         # base de démo (~80 mots), sans rien télécha
 
 ## La vraie base
 
-```sh
-# 1. Sources (à télécharger une fois)
-#    Lexique 3.83      http://www.lexique.org  → Lexique383.tsv
-#    Wiktionnaire fr   https://kaikki.org/frwiktionary/  → extraction JSONL (wiktextract)
-#    JeuxDeMots        https://www.jeuxdemots.org/JDM-LEXICALNET-FR/  → dump texte (optionnel)
-lem ingest lexique ~/Downloads/Lexique383.tsv
-lem ingest wiktionnaire ~/Downloads/fr-extract.jsonl.gz
-lem ingest wordfreq
-lem ingest jeuxdemots ~/Downloads/JDM-LEXICALNET-FR.txt    # optionnel
-lem prior --cible 45000          # a priori « adulte cultivé moyen »
+Les données vont dans `~/.lem/` (sources dans `~/.lem/sources`), **jamais dans le dépôt**.
 
-# 2. Vecteurs sémantiques (une fois, ~1 h sur un M4)
-ollama pull bge-m3 && lem index
+```sh
+# 1. Sources : Lexique 3.83 + Wiktionnaire français (wiktextract), puis ingestion et a priori
+lem telecharger lexique wiktionnaire --ingerer
+lem telecharger jeuxdemots && lem ingest jeuxdemots ~/.lem/sources/jeuxdemots.txt   # optionnel
+
+# 2. Vecteurs sémantiques (une fois, ~1 h sur un M4), puis seuils mesurés sur la base réelle
+ollama pull bge-m3 && lem index && lem calibrer
 
 # 3. Jouer
 lem
 ```
+
+Pour faire tout ça par un Claude Code local, utilise le prompt de [docs/claude-local.md](docs/claude-local.md).
 
 Pour noter les définitions avec ton abonnement Claude, en fin de session : menu « Noter avec Claude »,
 ou `lem noter --modele sonnet` (ou `haiku` pour les grosses fournées). La commande `claude` (Claude

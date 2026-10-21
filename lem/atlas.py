@@ -4,12 +4,14 @@
   2. Profil     : tes θ — où tu t'écartes de « l'adulte cultivé moyen » (origines, domaines, morphèmes).
   3. Signature  : la répartition de tes types d'erreur de définition (trop générale, connotation seule…).
   4. Confusions : tes paires confondues, avec la nature de la proximité.
-  5. Métacognition : ton auto-évaluation face à celle du correcteur.
-  6. Vitesse    : latences médianes par jeu.
+  5. Graphie    : tes fautes par type, frappe vs orthographe, mots à reprendre, risque par motif.
+  6. Métacognition : ton auto-évaluation face à celle du correcteur.
+  7. Vitesse    : latences médianes par jeu.
 """
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import statistics
 from collections import Counter
@@ -17,6 +19,7 @@ from collections import Counter
 from rich.text import Text
 
 from lem.grading.taxonomie import Erreur
+from lem.orthographe import GRAPHIE, profil, taux_motif
 from lem.similarite import comparer
 from lem.tui.theme import BLANC, ETATS, GRIS, PROXIMITES, SOMBRE, barre, etat_de
 
@@ -89,7 +92,34 @@ def rapport(con: sqlite3.Connection) -> Text:
         t.append(f"{p['fb']}", style=BLANC)
         t.append(f"   ×{p['poids']:.1f} · forme {comp.forme:.2f}\n", style=GRIS)
 
-    # 5. Métacognition
+    # 5. Graphie
+    _titre(t, "GRAPHIE — aucune variante acceptée")
+    fautes = [json.loads(r[0])["graphie"] for r in con.execute(
+        "SELECT data FROM evenement WHERE trace = 'ortho' AND correct = 0 AND data LIKE '%\"graphie\":{%'")]
+    if not fautes:
+        t.append("  aucune faute enregistrée\n", style=SOMBRE)
+    else:
+        types = Counter(x for f in fautes for x in f.get("types", []))
+        natures = Counter(f.get("nature") for f in fautes)
+        t.append(f"  {len(fautes)} fautes · orthographe {natures.get('orthographe', 0)} · "
+                 f"frappe {natures.get('frappe', 0)}\n", style=GRIS)
+        for typ, n in types.most_common():
+            t.append(f"  {typ:<20}", style=GRAPHIE)
+            t += barre(n / len(fautes), 30, GRAPHIE)
+            t.append(f" {n}\n", style=GRIS)
+        mots = Counter(f.get("correcte") for f in fautes)
+        t.append("  à reprendre : ", style=GRIS)
+        t.append(", ".join(f"{m} ×{n}" for m, n in mots.most_common(10)) + "\n", style=BLANC)
+    prof = profil(con)
+    lignes = [(m, f, o) for m, (f, o) in prof.items() if o]
+    if lignes:
+        t.append("  risque par motif (fautes / occasions)\n", style=GRIS)
+        for m, f, o in sorted(lignes, key=lambda x: -taux_motif(*x[1:])):
+            t.append(f"    {m:<18}{f:>3} / {o:<5}", style=BLANC)
+            t += barre(taux_motif(f, o) * 4, 16, GRAPHIE)
+            t.append(f" {taux_motif(f, o):.0%}\n", style=GRIS)
+
+    # 6. Métacognition
     _titre(t, "MÉTACOGNITION — toi vs le correcteur")
     duos = con.execute(
         """SELECT s.note AS soi, c.note AS ext FROM notation s JOIN notation c ON c.evenement_id = s.evenement_id
@@ -103,7 +133,7 @@ def rapport(con: sqlite3.Connection) -> Text:
     else:
         t.append("  pas encore de paires auto-évaluation / Claude\n", style=SOMBRE)
 
-    # 6. Vitesse
+    # 7. Vitesse
     _titre(t, "VITESSE — latence médiane")
     for jeu, in con.execute("SELECT DISTINCT jeu FROM evenement WHERE type = 'reponse'"):
         lats = [r[0] for r in con.execute(

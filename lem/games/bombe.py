@@ -33,6 +33,7 @@ from lem.games.base import PARAMS_FILTRES, Jeu, Param, enregistrer, filtres_depu
 from lem.games.pool import selectionner
 from lem.journal import Evenement, Frappe, ecrire
 from lem.memory.knowledge import CarteConnaissance, score_apprentissage
+from lem.orthographe import Diagnostic, diagnostiquer, enregistrer_faute
 from lem.similarite import Comparaison, Proximite, comparer, enregistrer_confusion
 from lem.texte import normaliser
 
@@ -59,7 +60,6 @@ BOMBE = enregistrer(Jeu(
         Param("k_haut", "Seuil sans répétition", int, 300, "au-delà, la suite ne revient pas", 2, 100_000),
         Param("repetitions_max", "Répétitions max", int, 5, "", 0, 20),
         Param("adaptatif", "Adaptatif", bool, True, "ajuste difficulté et durée à ta réussite"),
-        Param("accents_stricts", "Accents stricts", bool, False, ""),
     ],
 ))
 
@@ -95,6 +95,7 @@ class Retour:
     revelation: tuple[str, str] | None = None   # (forme, définition)
     vie_gagnee: bool = False
     points: float = 0.0
+    graphie: Diagnostic | None = None           # faute de graphie identifiée
 
 
 class PartieBombe:
@@ -119,11 +120,13 @@ class PartieBombe:
 
     # -- données ------------------------------------------------------------
     def _univers(self) -> None:
-        """Toutes les formes valides du français (comme JKLM, indépendamment des filtres)."""
+        """Toutes les formes valides du français (comme JKLM, indépendamment des filtres).
+
+        Graphie exacte exigée : accents compris. Aucune variante n'est acceptée."""
         self.valides: dict[str, set[int]] = {}
-        for forme, norme, eid in self.con.execute("SELECT forme, norme, entree_id FROM forme"):
-            cle = forme if self.params.get("accents_stricts") else norme
-            self.valides.setdefault(cle, set()).add(eid)
+        for forme, eid in self.con.execute("SELECT forme, entree_id FROM forme"):
+            self.valides.setdefault(forme, set()).add(eid)
+        self._candidats: dict[str, list[str]] = {}
 
     def reconfigurer(self) -> None:
         """(Re)construit le vivier après un changement de paramètres (/domaine, /etat…)."""
@@ -245,8 +248,14 @@ class PartieBombe:
 
     # -- tour de jeu ---------------------------------------------------------
     def _valider(self, texte: str) -> tuple[str | None, set[int]]:
-        cle = texte.strip().lower() if self.params.get("accents_stricts") else normaliser(texte)
+        cle = texte.strip().lower()
         return cle, self.valides.get(cle, set())
+
+    def _diagnostic(self, texte: str) -> Diagnostic | None:
+        suite = self.invite.suite
+        if suite not in self._candidats:
+            self._candidats[suite] = [k for k in self.valides if suite in normaliser(k)]
+        return diagnostiquer(self.con, texte, self.invite.cible_id, self._candidats[suite])
 
     def repondre(self, texte: str, latence_ms: int, frappe: Frappe | None = None) -> Retour:
         inv = self.invite
@@ -254,6 +263,11 @@ class PartieBombe:
         suite_ok = inv.suite in normaliser(texte)
         base = {"suite": inv.suite, "cible": inv.cible_forme, "k": round(inv.k, 2), "n": inv.n_solutions,
                 "repetitions_restantes": inv.repetitions, "fsrs": False}
+        if cle and suite_ok and not ids and cle not in self.utilises:
+            diag = self._diagnostic(texte)
+            if diag:
+                enregistrer_faute(self.con, self.session_id, "bombe", diag, latence_ms, frappe)
+                return Retour(False, "graphie", diag.entree_id, graphie=diag)
         if not cle or not suite_ok or not ids or cle in self.utilises:
             raison = ("ne contient pas « %s »" % inv.suite.upper() if not suite_ok
                       else "déjà utilisé" if cle in self.utilises else "mot inconnu")

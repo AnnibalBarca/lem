@@ -23,6 +23,7 @@ from lem.contexte import Contexte
 from lem.games import REGISTRE
 from lem.games.base import Jeu, executer_commande
 from lem.journal import Frappe, fermer_session, ouvrir_session
+from lem.orthographe import GRAPHIE, Diagnostic, surligner
 from lem.similarite import MESSAGES, Proximite
 from lem.tui import logo
 from lem.tui.theme import BLANC, CSS, GRIS, PROXIMITES, SOMBRE, barre, thermometre
@@ -54,6 +55,22 @@ class Chrono:
         lat = int((time.monotonic() - self.t0) * 1000)
         pf = None if self.premiere is None else int((self.premiere - self.t0) * 1000)
         return lat, Frappe(pf, self.frappes, self.effacements)
+
+
+LIBELLES_FAUTE = {"accent": "accent", "consonne_double": "consonne double", "h_muet": "h muet",
+                  "omission": "lettre manquante", "ajout": "lettre en trop", "substitution": "lettre erronée",
+                  "inversion": "lettres inversées", "frappe": "touche voisine", "grapheme": "graphème",
+                  "trait_union": "trait d'union", "inconnu": "graphie inconnue"}
+
+
+def ligne_graphie(d: Diagnostic) -> Text:
+    """✎ graphie  thuriféraire  ← tu as écrit t̶uriféraire  · h muet · orthographe"""
+    bon, tape = surligner(d.saisie, d.correcte)
+    t = Text("✎ graphie  ", style=f"bold {GRAPHIE}") + bon + Text("   tu as écrit ", style=GRIS) + tape
+    t.append("   " + " · ".join(LIBELLES_FAUTE.get(x, x) for x in d.types), style=GRAPHIE)
+    if d.distance >= 0:
+        t.append(f" · {d.nature}", style=GRIS)
+    return t
 
 
 def ligne_proximite(prox: Proximite | None, mot: str = "") -> Text:
@@ -328,7 +345,8 @@ class EcranCartes(EcranPartie):
     def _entete(self) -> None:
         from lem.games.base import filtres_depuis
 
-        ex = {"recep": "mot → sens", "prod": "sens → mot", "discrimination": "duel de confusables"}
+        ex = {"recep": "mot → sens", "prod": "sens → mot", "discrimination": "duel de confusables",
+              "graphie": "graphie exacte"}
         t = Text(f"CARTES  ", style="bold") + Text(f"{ex.get(self.item.exercice, '')}", style=BLANC)
         t += Text(f"   {self.faits} faites · {self.partie.restant()} restantes · {filtres_depuis(self.params).resume()}", style=GRIS)
         if self.item.nouveau:
@@ -337,6 +355,8 @@ class EcranCartes(EcranPartie):
 
     def suivant(self) -> None:
         self.resultat = None
+        self.recopies: list[str] = []
+        self.essais = 0
         self.item = self.partie.suivant()
         saisie = self.query_one("#saisie", Input)
         saisie.value = ""
@@ -354,6 +374,10 @@ class EcranCartes(EcranPartie):
                 else Text(it.forme, style=f"bold {BLANC}")
             st += Text(f"\n{it.pos} — définis-le, en phrase ou en synonymes séparés par des virgules", style=SOMBRE)
             saisie.placeholder = "définition ou synonymes…"
+        elif it.exercice == "graphie":
+            st = Text("✎ ta graphie revient\n\n", style=f"bold {GRAPHIE}") + Text(it.definition, style=BLANC)
+            st += Text(f"\n\n{it.pos} · {len(it.forme)} lettres · sans aucune faute", style=SOMBRE)
+            saisie.placeholder = "le mot, exactement…"
         elif it.exercice == "prod":
             st = Text(it.definition, style=BLANC) + Text(f"\n\n{it.pos} · {len(it.forme)} lettres · Tab = une lettre",
                                                          style=SOMBRE)
@@ -378,12 +402,45 @@ class EcranCartes(EcranPartie):
         if self.resultat is None:
             lat, frappe = self.chrono.mesures()
             self.resultat = self.partie.repondre(self.item, texte, lat, frappe)
+            self.recopies = list(dict.fromkeys(d.correcte for d in self.resultat.fautes))
             self._reveler()
+            self._demander_recopie()
+        elif self.recopies:
+            self._recopie(texte)
         else:
-            note = int(texte) if texte.strip() in {"1", "2", "3", "4"} else None
+            note = int(texte) if texte.strip() in {"1", "2", "3", "4"} and self.item.exercice != "graphie" else None
             self.partie.valider(self.resultat, note)
             self.faits += 1
             self.suivant()
+
+    def _demander_recopie(self) -> None:
+        saisie = self.query_one("#saisie", Input)
+        if self.recopies:
+            saisie.placeholder = f"retape la bonne graphie ({len(self.recopies[0])} lettres) — sans regarder si tu peux"
+            self.chrono.reset()
+        elif self.item.exercice == "graphie":
+            saisie.placeholder = "Entrée pour continuer"
+        else:
+            saisie.placeholder = "1–4, ou Entrée"
+
+    def _recopie(self, texte: str) -> None:
+        lat, _ = self.chrono.mesures()
+        attendu = self.recopies[0]
+        ok = self.partie.recopier(self.resultat, attendu, texte, lat)
+        if ok:
+            self.recopies.pop(0)
+            self.essais = 0
+            self.maj("retour", Text(f"✓ {attendu}", style=f"bold {BLANC}"))
+        else:
+            self.essais += 1
+            bon, tape = surligner(texte or "·", attendu)
+            msg = Text("✎ encore : ", style=f"bold {GRAPHIE}") + bon + Text("   ← ", style=GRIS) + tape
+            if self.essais >= 3:
+                self.recopies.pop(0)
+                self.essais = 0
+                msg.append("   (il reviendra)", style=GRIS)
+            self.maj("retour", msg)
+        self._demander_recopie()
 
     def _reveler(self) -> None:
         r, it = self.resultat, self.item
@@ -408,6 +465,9 @@ class EcranCartes(EcranPartie):
         if r.prod and r.prod.comparaison:
             t.append("\n")
             t += ligne_proximite(r.prod.comparaison.proximite, f"« {r.reponse} »")
+        for d in r.fautes:
+            t.append("\n")
+            t += ligne_graphie(d)
         self.maj("retour", t)
 
         d = Text(f"{it.forme}", style=f"bold {BLANC}") + Text(f"  {it.pos}\n", style=GRIS)
@@ -421,10 +481,10 @@ class EcranCartes(EcranPartie):
                 d.append(f"{v['mot']:<18}", style=f"bold {BLANC}")
                 d.append(f"{v['definition']}\n", style=GRIS)
         prop = r.note_proposee
-        d.append("\nnote : 1 raté · 2 difficile · 3 bien · 4 facile   ", style=GRIS)
-        d.append(f"Entrée = {prop}" if prop else "Entrée = laisser Claude juger", style=BLANC)
+        if it.exercice != "graphie":
+            d.append("\nnote : 1 raté · 2 difficile · 3 bien · 4 facile   ", style=GRIS)
+            d.append(f"Entrée = {prop}" if prop else "Entrée = laisser Claude juger", style=BLANC)
         self.maj("detail", d)
-        self.query_one("#saisie", Input).placeholder = "1–4, ou Entrée"
 
 
 # ── Bombe ───────────────────────────────────────────────────────────────────────────────────────
@@ -496,6 +556,9 @@ class EcranBombe(EcranPartie):
         t = Text()
         if r.message == "BOUM":
             t.append("BOUM", style="bold #ff5f5f")
+        elif r.graphie:
+            t += ligne_graphie(r.graphie)
+            t.append("\nretape-le juste pour passer la bombe", style=GRIS)
         elif r.cible_trouvee:
             t.append("● cible trouvée", style="bold #5fd75f")
         elif r.proximite and r.proximite != Proximite.AUCUNE:

@@ -203,6 +203,29 @@ tu les repéreras parfois. Le générateur est à affiner (type Wuggy).
 L'Étalonnage choisit ses mots là où l'information est maximale (p(1 − p)). Un « oui » donné à un
 pseudo-mot réduit le poids de tes « oui » suivants.
 
+## 5bis. Graphie : aucune variante
+
+`lem/orthographe.py`. Une saisie n'est valide que si c'est une **forme exacte** du lexique (casse mise à
+part ; accents compris). Si la saisie est proche d'un mot réel, on produit un diagnostic :
+* le mot visé et la distance (Damerau-Levenshtein) ;
+* les types de faute : accent, consonne double, h muet, omission, ajout, substitution, inversion,
+  touche voisine (AZERTY), graphème (i/y, c/k/qu…), trait d'union ;
+* homophone ou non, par une clé phonétique approximative : une faute qui se prononce comme le mot est
+  une faute d'**orthographe**, sinon plutôt de **frappe** ;
+* une confiance.
+
+Ce que le système fait de la faute :
+* elle s'affiche en jaune (couleur réservée à la graphie) : bonne graphie avec les zones fautives
+  soulignées, saisie avec les lettres fautives barrées ;
+* il faut **retaper le mot juste** (3 essais), dans la Bombe comme dans les cartes ;
+* le mot revient trois cartes plus loin, puis à intervalles espacés, sur une trace FSRS `ortho` ;
+* les fautes dans tes définitions et tes synonymes sont repérées de la même façon ;
+* le profil orthographique (taux de faute par motif : consonnes doubles, h muet, graphies grecques,
+  accents, finales muettes, nasales) estime le risque de faute sur n'importe quel mot, même jamais tapé.
+
+On ne te montre jamais ta graphie fautive seule : toujours à côté de la bonne. Voir une forme fautive
+peut l'ancrer ; c'est le principe « copier, cacher, comparer » de l'enseignement de l'orthographe.
+
 ## 6. Les données sur toi
 
 On construit pour le vocabulaire, et on **enregistre brut dès le départ** ce qui coûte peu et
@@ -263,9 +286,11 @@ Tout tourne en local sur le Mac. Le seul service extérieur est Claude, en fin d
 1. ✅ Socle : schéma, journal, FSRS rejouable, carte de connaissance, similarités, grappes, notation
    (directe, Claude, contrat Jev).
 2. ✅ Jeux : Cartes, Bombe, Mémoire verbale, Mot ou pas mot, Étalonnage, Atlas. TUI, CLI, tests.
-3. **Ingestion réelle sur ton Mac**, puis `lem index` ; recalibrer les seuils de proximité et de
-   température sur tes données (table `reglage`).
+3. **Ingestion réelle sur ton Mac** (`lem telecharger --ingerer`), puis `lem index` et `lem calibrer`
+   (seuils de proximité et de température mesurés sur la base réelle). Prompt prêt pour un Claude
+   Code local : `docs/claude-local.md`.
 4. Étalonnage initial (environ 150 questions), puis 2 à 3 semaines de jeu.
 5. Optimiseur FSRS sur ton journal (paramètres personnels).
 6. Intrus, DAT, Cemantix branché ; carte braille du lexique.
-7. Mots fléchés ; Morphalou ; dessin à la souris ; client Jev.
+7. Mots fléchés ; Morphalou ; dessin à la souris ; carte visuelle du lexique ; client Jev. Tous en
+   terminal, avec le même soin de design que le reste.

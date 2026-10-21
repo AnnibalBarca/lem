@@ -3,6 +3,7 @@
 Une trace = (entrée, sens, direction). Deux directions par sens :
   recep : mot → sens   (vocabulaire passif)
   prod  : sens → mot   (vocabulaire actif)
+  ortho : graphie exacte (créée à la première faute, au niveau du lemme)
 
 L'état n'est jamais « écrit à la main » : il est rejoué depuis le journal avec la
 meilleure note disponible pour chaque réponse (humain > Jev > Claude > embedding).
@@ -23,7 +24,7 @@ from fsrs import Card, Rating, Scheduler
 from lem.db import get_reglage, iso, now, parse_iso
 from lem.journal import rang_correcteur
 
-TRACES = ("recep", "prod")
+TRACES = ("recep", "prod", "ortho")
 
 
 def ordonnanceur(con: sqlite3.Connection) -> Scheduler:
@@ -114,7 +115,7 @@ def reconstruire(con: sqlite3.Connection, entree_ids: list[int] | None = None) -
         con.execute("DELETE FROM trace_etat")
     rows = con.execute(
         f"""SELECT id, ts, entree_id, COALESCE(sens_id, 0) AS sens_id, trace, note_auto, data
-            FROM evenement WHERE type = 'reponse' AND trace IN ('recep', 'prod') {filtre}
+            FROM evenement WHERE type = 'reponse' AND trace IN ('recep', 'prod', 'ortho') {filtre}
             ORDER BY ts, id""",
         args,
     ).fetchall()
