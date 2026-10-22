@@ -21,6 +21,7 @@ from textual.widgets import Footer, Input, OptionList, RichLog, Static
 from textual.widgets.option_list import Option
 
 from lem.contexte import Contexte
+from lem.db import now
 from lem.games import REGISTRE
 from lem.games.base import Jeu, executer_commande
 from lem.grading.taxonomie import PRECISION
@@ -446,6 +447,7 @@ class EcranCartes(EcranPartie):
         self.item = None
         self.resultat = None
         self.faits = 0
+        self.debut_session = now()
         self.suivant()
 
     def reconfigurer(self) -> None:
@@ -457,10 +459,18 @@ class EcranCartes(EcranPartie):
 
         ex = {"recep": "mot → sens", "prod": "sens → mot", "discrimination": "duel de confusables",
               "graphie": "graphie exacte"}
+        roles = {"sonde": "nouveau ?", "apprentissage": "en apprentissage", "verification": "vérification",
+                 "reprise": "reprise", "revision": "révision"}
+        plan = self.partie.plan
         t = Text(f"CARTES  ", style="bold") + Text(f"{ex.get(self.item.exercice, '')}", style=BLANC)
-        t += Text(f"   {self.faits} faites · {self.partie.restant()} restantes · {filtres_depuis(self.params).resume()}", style=GRIS)
-        if self.item.nouveau:
-            t += Text("   nouveau", style="#5f87d7")
+        t += Text(f"   {roles.get(self.item.role, '')}", style="#5f87d7" if self.item.role in ("sonde", "apprentissage")
+                  else GRIS)
+        t += Text(f"   {self.faits} faites · ~{self.partie.restant()} à venir", style=GRIS)
+        if plan.connus or plan.entres:
+            t += Text(f" · {plan.connus} connus · {plan.entres} appris", style=GRIS)
+        resume = filtres_depuis(self.params).resume()
+        if resume != "tout le lexique" or self.params.get("intention", "equilibre") != "equilibre":
+            t += Text(f" · {self.params.get('intention', 'equilibre')} · {resume}", style=SOMBRE)
         self.maj("entete", t)
 
     def suivant(self) -> None:
@@ -473,17 +483,22 @@ class EcranCartes(EcranPartie):
         self.maj("retour", "")
         self.maj("detail", "")
         if self.item is None:
-            self.maj("entete", Text("CARTES", style="bold"))
-            self.maj("stimulus", Text("Rien à réviser avec ces filtres.\n", style=BLANC)
-                     + Text("Change-les (/domaine, /etat, /nouveaux 20) ou Échap pour revenir.", style=GRIS))
+            self._fin_de_session()
             return
         self._entete()
         it = self.item
         if it.exercice == "recep":
             st = logo.rangee(it.forme) if len(it.forme) <= 18 and " " not in it.forme \
                 else Text(it.forme, style=f"bold {BLANC}")
-            st += Text(f"\n{it.pos} — définis-le, en phrase ou en synonymes séparés par des virgules", style=SOMBRE)
-            saisie.placeholder = "définition ou synonymes…"
+            if it.role == "sonde":
+                st += Text(f"\n{it.pos} — le connais-tu ? Définis-le ; Entrée seule : je ne sais pas", style=SOMBRE)
+                saisie.placeholder = "définition, synonymes… ou Entrée"
+            elif it.role == "verification":
+                st += Text(f"\n{it.pos} — vérification : tu le connaissais il y a un mois ou deux", style=SOMBRE)
+                saisie.placeholder = "définition ou synonymes…"
+            else:
+                st += Text(f"\n{it.pos} — définis-le, en phrase ou en synonymes séparés par des virgules", style=SOMBRE)
+                saisie.placeholder = "définition ou synonymes…"
         elif it.exercice == "graphie":
             st = Text("✎ ta graphie revient\n\n", style=f"bold {GRAPHIE}") + Text(it.definition, style=BLANC)
             st += Text(f"\n\n{it.pos} · {len(it.forme)} lettres · sans aucune faute", style=SOMBRE)
@@ -590,9 +605,28 @@ class EcranCartes(EcranPartie):
             self._auto = None
         if self.resultat is None or not self.is_mounted:
             return
-        self.partie.valider(self.resultat, note)
+        voie = self.partie.valider(self.resultat, note)
+        if voie == "connu":
+            self.app.notify(f"« {self.resultat.item.forme} » : connu — une seule vérification, dans un mois ou deux",
+                            timeout=3)
         self.faits += 1
         self.suivant()
+
+    def _fin_de_session(self) -> None:
+        """Bilan : ce que la session a fait, et comment continuer."""
+        plan = self.partie.plan
+        minutes = (now() - self.debut_session).total_seconds() / 60 if getattr(self, "debut_session", None) else 0
+        self.maj("entete", Text("CARTES", style="bold") + Text("   session terminée", style=GRIS))
+        t = logo.rangee("fin") + Text("\n\n")
+        lignes = [(f"{self.faits}", "cartes"), (f"{plan.entres}", "mots appris (ils reviendront)"),
+                  (f"{plan.connus}", "mots déjà connus (une vérification dans 1 à 2 mois)"),
+                  (f"{minutes:.0f}", "minutes")]
+        larg = max(len(lib) for _, lib in lignes)
+        for n, lib in lignes:                               # lignes de même largeur : le bloc reste aligné
+            t += Text(f"{n:>6}  ", style=f"bold {BLANC}") + Text(f"{lib.ljust(larg)}\n", style=GRIS)
+        t += Text("\nContinuer : /nouveaux 10 · /intention decouvrir · /intention consolider — ou Échap.", style=SOMBRE)
+        self.maj("stimulus", t)
+        self.query_one("#saisie", Input).placeholder = "/commande, ou Échap"
 
     def _demander_recopie(self) -> None:
         saisie = self.query_one("#saisie", Input)
@@ -1031,6 +1065,29 @@ class LemApp(App):
 
     def on_mount(self) -> None:
         self.push_screen(Accueil())
+        self.run_worker(self._optimiser_en_fond, thread=True, group="optimiseur")
+
+    def _optimiser_en_fond(self) -> None:
+        """Une fois par semaine (assez de révisions nouvelles) : paramètres FSRS ajustés sur ton journal,
+        sur une connexion à part ; les échéances suivent dès la session suivante."""
+        from lem.db import connect
+        from lem.memory.optimiseur import a_optimiser, optimiser
+
+        if self.ctx.chemin == ":memory:":
+            return
+        con = connect(self.ctx.chemin)
+        try:
+            if a_optimiser(con):
+                raps = optimiser(con)
+                adoptes = [t for t, r in raps.items() if r.adopte]
+                if adoptes:
+                    noms = {"recep": "sens", "prod": "mot", "ortho": "graphie"}
+                    self.call_from_thread(self.notify, "Intervalles ajustés à ta mémoire : "
+                                          + ", ".join(noms[t] for t in adoptes), timeout=6)
+        except Exception:                        # jamais bloquant : on réessaiera à la prochaine ouverture
+            pass
+        finally:
+            con.close()
 
     def on_unmount(self) -> None:
         self.ctx.carte.recalculer_tout()

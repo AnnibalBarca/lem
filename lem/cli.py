@@ -11,6 +11,8 @@
   lem noter [--modele M]   notation différée par Claude Code headless (sonnet par défaut)
   lem nettoyer             retire les gabarits « Définition manquante… » (base déjà ingérée)
   lem rebuild              rejoue tout le journal (FSRS + carte de connaissance)
+  lem optimiser            ajuste les paramètres FSRS sur ton journal (aussi fait chaque semaine en fond)
+  lem simuler              banc d'essai du moteur sur un élève simulé
   lem atlas                imprime l'atlas dans le terminal
 """
 
@@ -161,6 +163,37 @@ def cmd_nettoyer(args) -> None:
         print("→ `lem index` (avec les mêmes options) recalcule leurs vecteurs.")
 
 
+def cmd_optimiser(args) -> None:
+    from lem.memory.optimiseur import MIN_REVISIONS, optimiser
+
+    ctx = _ctx(args)
+    raps = optimiser(ctx.con, adopter=not args.essai)
+    for trace, r in raps.items():
+        nom = {"recep": "sens (mot → sens)", "prod": "mot (sens → mot)", "ortho": "graphie"}[trace]
+        if r.n_revisions < MIN_REVISIONS:
+            print(f"{nom:<20} {r.n_revisions} révisions espacées — il en faut {MIN_REVISIONS}, paramètres inchangés")
+        else:
+            verdict = "adoptés" if r.adopte and not args.essai else ("meilleurs (essai)" if r.adopte else "gardés")
+            print(f"{nom:<20} {r.n_revisions} révisions · perte récente {r.validation_avant} → {r.validation_apres} · {verdict}")
+
+
+def cmd_simuler(args) -> None:
+    import json
+    from dataclasses import asdict
+
+    from lem.simulation import comparer, simuler
+
+    cfg = json.loads(args.params) if args.params else {}
+    if args.graines > 1:
+        r = comparer({"moteur": cfg}, graines=range(args.graines), jours=args.jours, minutes=args.minutes,
+                     params_eleve=args.eleve, optimiser_chaque=args.optimiser)["moteur"]
+        print(json.dumps(r, ensure_ascii=False, indent=2))
+    else:
+        r = simuler(cfg, jours=args.jours, minutes=args.minutes, params_eleve=args.eleve,
+                    optimiser_chaque=args.optimiser, journal=print)
+        print(json.dumps(asdict(r), ensure_ascii=False, indent=2))
+
+
 def cmd_rebuild(args) -> None:
     from lem.memory import scheduler
 
@@ -216,6 +249,17 @@ def main(argv: list[str] | None = None) -> None:
     n.set_defaults(f=cmd_noter)
     sp.add_parser("nettoyer", help="retire les gabarits « Définition manquante… » d'une base déjà ingérée").set_defaults(f=cmd_nettoyer)
     sp.add_parser("rebuild").set_defaults(f=cmd_rebuild)
+    o = sp.add_parser("optimiser", help="ajuste les paramètres FSRS sur ton journal (un jeu par type de carte)")
+    o.add_argument("--essai", action="store_true", help="mesurer sans adopter")
+    o.set_defaults(f=cmd_optimiser)
+    s = sp.add_parser("simuler", help="banc d'essai du moteur sur un élève simulé")
+    s.add_argument("--jours", type=int, default=30)
+    s.add_argument("--minutes", type=float, default=15.0)
+    s.add_argument("--eleve", default="moyen", choices=["faible", "moyen", "fort"])
+    s.add_argument("--graines", type=int, default=1)
+    s.add_argument("--optimiser", type=int, default=7, help="optimiseur FSRS tous les N jours (0 : jamais)")
+    s.add_argument("--params", help="paramètres du jeu de Cartes, en JSON")
+    s.set_defaults(f=cmd_simuler)
     sp.add_parser("atlas").set_defaults(f=cmd_atlas)
 
     args = ap.parse_args(argv)

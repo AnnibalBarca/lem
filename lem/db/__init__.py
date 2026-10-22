@@ -46,6 +46,7 @@ def connect(path: str | Path | None = None) -> sqlite3.Connection:
     con = sqlite3.connect(path, check_same_thread=False)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys = ON")
+    con.execute("PRAGMA busy_timeout = 10000")   # l'optimiseur écrit en fond pendant qu'on joue
     if path != ":memory:":
         con.execute("PRAGMA journal_mode = WAL")
         con.execute("PRAGMA synchronous = NORMAL")

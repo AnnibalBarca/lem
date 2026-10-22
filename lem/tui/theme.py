@@ -122,4 +122,7 @@ FooterKey .footer-key--key {{ background: #1c1c1c; color: {BLANC}; }}
 #retour {{ height: auto; min-height: 1; padding: 0 0 1 0; }}
 #detail {{ height: auto; }}
 #journal {{ height: 1fr; background: #000000; border: none; }}
+Toast {{ background: #111111; color: {BLANC}; border-left: outer {GRIS}; }}
+Toast.-information {{ border-left: outer {GRIS}; }}
+Toast .toast--title {{ color: {GRIS}; }}
 """
