@@ -65,3 +65,18 @@ def test_zipf_locutions():
     assert ingest.zipf_estime("ligne de Hunter") < ingest.zipf_estime("Hunter")
     assert ingest.zipf_estime("pomme de terre") > ingest.zipf_estime("casser sa pipe")
     assert ingest.zipf_estime("thuriféraire") == pytest.approx(1.57, abs=0.3)
+
+
+def test_indexation_restreinte():
+    from lem.vecteurs import HashEmbedder, indexer
+
+    con = connect(":memory:")
+    ingest.lexique(con, DATA / "lexique383_extrait.tsv")
+    ingest.wiktionnaire(con, DATA / "frwiktionary_extrait.jsonl")
+    ingest.zipf_wordfreq(con)
+    emb = HashEmbedder()
+    n = indexer(con, emb, "sens", zipf_min=0, rang_max=1)
+    attendus = con.execute("SELECT COUNT(*) FROM sens s JOIN entree e ON e.id = s.entree_id "
+                           "WHERE e.zipf > 0 AND s.rang <= 1").fetchone()[0]
+    assert n == attendus and 0 < n < con.execute("SELECT COUNT(*) FROM sens").fetchone()[0]
+    assert indexer(con, emb, "sens") == con.execute("SELECT COUNT(*) FROM sens").fetchone()[0] - n   # le reste

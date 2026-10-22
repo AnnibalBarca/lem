@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import os
 import sqlite3
+import time
 from dataclasses import dataclass
 from typing import Protocol, Sequence
 
@@ -56,8 +57,16 @@ class OllamaEmbedder:
     def embed(self, textes: Sequence[str]) -> np.ndarray:
         import httpx
 
-        r = httpx.post(f"{self.url}/api/embed", json={"model": self.nom, "input": list(textes)}, timeout=120)
-        r.raise_for_status()
+        for essai in range(4):
+            try:
+                r = httpx.post(f"{self.url}/api/embed", json={"model": self.nom, "input": list(textes)}, timeout=120)
+                r.raise_for_status()
+                break
+            except httpx.HTTPError:
+                # Le processus d'Ollama peut redémarrer en cours de route (vu sous Windows) : on réessaie.
+                if essai == 3:
+                    raise
+                time.sleep(2 ** essai)
         return _normaliser(np.asarray(r.json()["embeddings"], dtype=np.float32))
 
     def disponible(self) -> bool:
@@ -101,21 +110,31 @@ def texte_entree(forme: str, definition: str | None) -> str:
 
 
 def indexer(con: sqlite3.Connection, embedder: Embedder, objet: str = "sens", lot: int = 64,
-            progression=None) -> int:
-    """Calcule les vecteurs manquants pour 'sens' ou 'entree'. Renvoie le nombre ajouté."""
+            progression=None, zipf_min: float | None = None, rang_max: int | None = None) -> int:
+    """Calcule les vecteurs manquants pour 'sens' ou 'entree'. Renvoie le nombre ajouté.
+
+    zipf_min / rang_max restreignent l'indexation (entrées attestées, sens principaux) ; une indexation
+    complète ultérieure ne calcule que ce qui manque."""
+    filtre, params = "", [embedder.nom]
+    if zipf_min is not None:
+        filtre += " AND e.zipf > ?"
+        params.append(zipf_min)
     if objet == "sens":
+        if rang_max is not None:
+            filtre += " AND s.rang <= ?"
+            params.append(rang_max)
         rows = con.execute(
-            """SELECT s.id, e.forme, COALESCE(s.definition_precise, s.definition) AS d FROM sens s
+            f"""SELECT s.id, e.forme, COALESCE(s.definition_precise, s.definition) AS d FROM sens s
                JOIN entree e ON e.id = s.entree_id
-               WHERE s.id NOT IN (SELECT objet_id FROM embedding WHERE objet = 'sens' AND modele = ?)""",
-            (embedder.nom,),
+               WHERE s.id NOT IN (SELECT objet_id FROM embedding WHERE objet = 'sens' AND modele = ?){filtre}""",
+            params,
         ).fetchall()
     else:
         rows = con.execute(
-            """SELECT e.id, e.forme, (SELECT COALESCE(definition_precise, definition) FROM sens
+            f"""SELECT e.id, e.forme, (SELECT COALESCE(definition_precise, definition) FROM sens
                    WHERE entree_id = e.id ORDER BY rang LIMIT 1) AS d FROM entree e
-               WHERE e.id NOT IN (SELECT objet_id FROM embedding WHERE objet = 'entree' AND modele = ?)""",
-            (embedder.nom,),
+               WHERE e.id NOT IN (SELECT objet_id FROM embedding WHERE objet = 'entree' AND modele = ?){filtre}""",
+            params,
         ).fetchall()
     total = 0
     for i in range(0, len(rows), lot):

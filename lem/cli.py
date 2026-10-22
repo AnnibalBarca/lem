@@ -128,7 +128,8 @@ def cmd_index(args) -> None:
     if not emb.disponible():
         sys.exit("Ollama ne répond pas : `ollama serve` puis `ollama pull bge-m3`.")
     for objet in ("sens", "entree"):
-        n = indexer(ctx.con, emb, objet, progression=lambda a, b: print(f"  {objet} {a}/{b}", end="\r", flush=True))
+        n = indexer(ctx.con, emb, objet, zipf_min=args.zipf_min, rang_max=args.rang_max,
+                    progression=lambda a, b: print(f"  {objet} {a}/{b}", end="\r", flush=True))
         print(f"\n{objet} : {n} vecteurs")
 
 
@@ -186,6 +187,8 @@ def main(argv: list[str] | None = None) -> None:
     p.set_defaults(f=cmd_prior)
     x = sp.add_parser("index")
     x.add_argument("--modele-embedding", default="bge-m3")
+    x.add_argument("--zipf-min", type=float, default=None, help="seulement les entrées de Zipf > ce seuil (ex. 0)")
+    x.add_argument("--rang-max", type=int, default=None, help="seulement les sens de rang ≤ ce rang (ex. 3)")
     x.set_defaults(f=cmd_index)
     n = sp.add_parser("noter")
     n.add_argument("--limite", type=int, default=500)
