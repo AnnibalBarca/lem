@@ -274,6 +274,8 @@ class EcranPartie(Screen):
         self.jeu, self.params = jeu, params
         self.chrono = Chrono()
         self.session_id: int | None = None
+        self.partie = None
+        self.occupe = False          # un calcul tourne en fond : saisies ignorées, bombe en pause
 
     def compose(self) -> ComposeResult:
         with Center():
@@ -291,8 +293,46 @@ class EcranPartie(Screen):
 
     def on_mount(self) -> None:
         self.session_id = ouvrir_session(self.ctx.con, self.jeu.id, self.params)
+        self.maj("stimulus", Text("chargement…", style=SOMBRE))
+        self.en_fond(self.construire, self._construite)
+
+    def construire(self):
+        """Construit la partie (lourd sur la vraie base : vivier, formes, carte). Appelé hors de l'interface."""
+
+    def _construite(self, partie) -> None:
+        self.partie = partie
         self.demarrer()
         self.query_one("#saisie").focus()
+
+    def en_fond(self, calcul, puis) -> None:
+        """Lance `calcul()` dans un fil à part, puis `puis(résultat)` dans l'interface.
+
+        Sur la vraie base (550 k entrées, 2 M formes), construire une partie ou juger une réponse prend
+        de 0,3 à 6 s : dans le fil de l'interface, l'écran gelait. Un seul calcul à la fois (`occupe`)."""
+        self.occupe = True
+
+        def tache():
+            try:
+                r = calcul()
+            except Exception as exc:          # remonté dans l'interface, pas perdu dans le fil
+                self.app.call_from_thread(self._echec_fond, exc)
+                return
+            self.app.call_from_thread(self._fin_fond, puis, r)
+
+        self.run_worker(tache, thread=True, group="calcul")
+
+    def _fin_fond(self, puis, r) -> None:
+        self.occupe = False
+        if self.is_mounted:
+            puis(r)
+
+    def _echec_fond(self, exc: Exception) -> None:
+        self.occupe = False
+        raise exc
+
+    @property
+    def pret(self) -> bool:
+        return self.partie is not None and not self.occupe
 
     def on_unmount(self) -> None:
         if self.session_id:
@@ -321,7 +361,8 @@ class EcranPartie(Screen):
         self.maj("retour", Text(res.message, style=style))
         if res.change:
             self.ctx.sauver_params(self.jeu, self.params)
-            self.reconfigurer()
+            if self.pret:
+                self.reconfigurer()
         self.query_one("#saisie", Input).value = ""
         return True
 
@@ -334,11 +375,13 @@ class EcranPartie(Screen):
 class EcranCartes(EcranPartie):
     BINDINGS = [Binding("escape", "quitter", "Menu"), Binding("tab", "indice", "Indice (lettre)", priority=True)]
 
-    def demarrer(self) -> None:
+    def construire(self):
         from lem.games.cartes import PartieCartes
 
-        self.partie = PartieCartes(self.ctx.con, self.params, self.ctx.carte, self.ctx.embedder,
-                                   self.ctx.magasin_sens, self.ctx.magasin_entrees, self.session_id)
+        return PartieCartes(self.ctx.con, self.params, self.ctx.carte, self.ctx.embedder,
+                            self.ctx.magasin_sens, self.ctx.magasin_entrees, self.session_id)
+
+    def demarrer(self) -> None:
         self.item = None
         self.resultat = None
         self.faits = 0
@@ -346,8 +389,7 @@ class EcranCartes(EcranPartie):
 
     def reconfigurer(self) -> None:
         self.partie.params = self.params
-        self.partie.construire_file()
-        self.suivant()
+        self.en_fond(self.partie.construire_file, lambda _: self.suivant())
 
     def _entete(self) -> None:
         from lem.games.base import filtres_depuis
@@ -398,12 +440,12 @@ class EcranCartes(EcranPartie):
         self.chrono.reset()
 
     def action_indice(self) -> None:
-        if self.item and self.item.exercice == "prod" and self.resultat is None:
+        if self.pret and self.item and self.item.exercice == "prod" and self.resultat is None:
             self.maj("retour", Text("indice : ", style=GRIS) + Text(self.partie.indice(self.item), style=f"bold {BLANC}"))
 
     def on_input_submitted(self, ev: Input.Submitted) -> None:
         texte = ev.value
-        if self.commande(texte) or self.item is None:
+        if self.commande(texte) or not self.pret or self.item is None:
             return
         ev.input.value = ""
         if self.resultat is None:
@@ -519,21 +561,25 @@ class EcranBombe(EcranPartie):
                 yield Static(id="detail")
         yield Footer()
 
-    def demarrer(self) -> None:
+    def construire(self):
         from lem.games.bombe import PartieBombe
 
-        self.partie = PartieBombe(self.ctx.con, self.params, self.ctx.carte, self.ctx.magasin_entrees, self.session_id)
+        return PartieBombe(self.ctx.con, self.params, self.ctx.carte, self.ctx.magasin_entrees, self.session_id)
+
+    def demarrer(self) -> None:
         self.historique: list[Text] = []
         self.t_invite = time.monotonic()
         self.fini = False
         self._afficher_invite()
-        self.minuteur = self.set_interval(0.1, self._tic)
+        if not hasattr(self, "minuteur"):
+            self.minuteur = self.set_interval(0.1, self._tic)
 
     def reconfigurer(self) -> None:
-        self.partie.params = self.params
-        self.partie.reconfigurer()
-        self.partie.invite = self.partie.nouvelle_invite()
-        self._afficher_invite()
+        def calcul():
+            self.partie.params = self.params
+            self.partie.reconfigurer()
+            self.partie.invite = self.partie.nouvelle_invite()
+        self.en_fond(calcul, lambda _: self._afficher_invite())
 
     def _afficher_invite(self) -> None:
         inv = self.partie.invite
@@ -555,7 +601,10 @@ class EcranBombe(EcranPartie):
         self.maj("entete", t)
 
     def _tic(self) -> None:
-        if self.fini:
+        if self.partie is None or self.fini:
+            return
+        if self.occupe:                        # le temps de calcul ne compte pas contre le joueur
+            self.t_invite += 0.1
             return
         inv = self.partie.invite
         reste = inv.duree - (time.monotonic() - self.t_invite)
@@ -609,16 +658,23 @@ class EcranBombe(EcranPartie):
     def on_input_submitted(self, ev: Input.Submitted) -> None:
         texte = ev.value.strip()
         if self.fini:
-            if texte.lower() in {"", "r", "rejouer"}:
+            if texte.lower() in {"", "r", "rejouer"} and self.pret:
                 ev.input.value = ""
-                self.fini = False
-                self.demarrer()
+                self.maj("stimulus", Text("chargement…", style=SOMBRE))
+                self.en_fond(self.construire, self._rejouer)
             return
-        if not texte or self.commande(texte):
+        if not texte or self.commande(texte) or not self.pret:
             return
         ev.input.value = ""
         lat, frappe = self.chrono.mesures()
-        r = self.partie.repondre(texte, lat, frappe)
+        self.en_fond(lambda: self.partie.repondre(texte, lat, frappe), lambda r: self._apres_reponse(r, texte))
+
+    def _rejouer(self, partie) -> None:
+        self.partie = partie
+        self.fini = False
+        self.demarrer()
+
+    def _apres_reponse(self, r, texte: str) -> None:
         self._retour(r, texte)
         if r.valide:
             self._afficher_invite()
@@ -633,10 +689,12 @@ class EcranBombe(EcranPartie):
 class EcranMemoire(EcranPartie):
     BINDINGS = [Binding("escape", "quitter", "Menu"), Binding("v", "vu", "Vu"), Binding("n", "nouveau", "Nouveau")]
 
-    def demarrer(self) -> None:
+    def construire(self):
         from lem.games.memoire_verbale import PartieMemoire
 
-        self.partie = PartieMemoire(self.ctx.con, self.params, self.session_id)
+        return PartieMemoire(self.ctx.con, self.params, self.session_id)
+
+    def demarrer(self) -> None:
         self.attente_image = None
         self.query_one("#saisie").display = False
         self.maj("detail", Text("V = déjà vu · N = nouveau", style=GRIS))
@@ -652,7 +710,7 @@ class EcranMemoire(EcranPartie):
         self.chrono.reset()
 
     def _repondre(self, vu: bool) -> None:
-        if self.attente_image is not None or self.partie.finie:
+        if not self.pret or self.attente_image is not None or self.partie.finie:
             return
         lat, _ = self.chrono.mesures()
         tour = self.partie.tour
@@ -692,10 +750,12 @@ class EcranMemoire(EcranPartie):
 class EcranDecision(EcranPartie):
     BINDINGS = [Binding("escape", "quitter", "Menu"), Binding("o", "oui", "Oui"), Binding("n", "non", "Non")]
 
-    def demarrer(self) -> None:
+    def construire(self):
         from lem.games.decision import PartieDecision
 
-        self.partie = PartieDecision(self.ctx.con, self.jeu.id, self.params, self.ctx.carte, self.session_id)
+        return PartieDecision(self.ctx.con, self.jeu.id, self.params, self.ctx.carte, self.session_id)
+
+    def demarrer(self) -> None:
         self.verif = False
         self.query_one("#saisie").display = False
         q = "Connais-tu ce mot ?" if self.jeu.id == "etalonnage" else "Mot réel ?"
@@ -719,7 +779,7 @@ class EcranDecision(EcranPartie):
         self.chrono.reset()
 
     def _repondre(self, oui: bool) -> None:
-        if self.verif or self.partie.finie:
+        if not self.pret or self.verif or self.partie.finie:
             return
         lat, _ = self.chrono.mesures()
         ok = self.partie.repondre(oui, lat)

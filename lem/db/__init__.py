@@ -32,7 +32,8 @@ def connect(path: str | Path | None = None) -> sqlite3.Connection:
     path = str(path or DEFAULT_DB)
     if path != ":memory:":
         Path(path).parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(path)
+    # Les écrans de jeu calculent dans un fil à part (tui.app.EcranPartie.en_fond), un seul à la fois.
+    con = sqlite3.connect(path, check_same_thread=False)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys = ON")
     if path != ":memory:":
