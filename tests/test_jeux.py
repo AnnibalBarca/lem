@@ -224,3 +224,10 @@ def test_bombe_retour_cible_courte(con, carte, rng):
     b.retours.append((b.n_invites, cid, 30, 0))         # longueur demandée > longueur du mot
     inv = b.nouvelle_invite()
     assert inv.cible_id == cid and inv.suite.isalpha()
+
+
+def test_cartes_ignorent_les_sens_sans_definition(con, carte, rng):
+    eid_ = con.execute("SELECT id FROM entree WHERE forme = 'acronyme'").fetchone()[0]
+    con.execute("UPDATE sens SET definition = '' WHERE entree_id = ?", (eid_,))
+    partie = PartieCartes(con, params("cartes", nouveaux=0), carte, rng=rng)
+    assert partie._item("recep", eid_) is None

@@ -195,6 +195,53 @@ def api_vers_lexique(api: str) -> str:
     return api
 
 
+# Gabarits du Wiktionnaire laissés dans les gloses : « Définition manquante ou à compléter. (Ajouter) ».
+RE_GABARIT = re.compile(r"(?:Définition manquante ou à compléter|Exemple d’utilisation manquant|Exemple d'utilisation manquant)"
+                        r"\.?\s*\(Ajouter\)\s*\}?\s*[.…]*|\(définition à vérifier\)|^#\s*")
+RE_FIN_PENDANTE = re.compile(r"(?:[,:;]|\b(?:à|de|des|du|et|en|le|la|les|un|une)|…)\s*$", re.I)
+
+
+def nettoyer_definition(texte: str) -> str | None:
+    """Retire les gabarits « Définition manquante… (Ajouter) ». None s'il ne reste pas une vraie définition
+    (« Toucher. » reste ; « pronominal », « En ski, », « Habitant de… » non)."""
+    t = re.sub(r"!!.*?!!", " ", RE_GABARIT.sub(" ", texte))       # notes de rédaction « !! … !! »
+    t = re.sub(r"\s+", " ", t).strip(" .…!?")
+    if not t or not re.search(r"[a-zà-ÿ]{2}", t, re.I) or RE_FIN_PENDANTE.search(t):
+        return None
+    if " " not in t and not texte.rstrip().endswith((".", "…")) and t[0].islower():
+        return None                                  # un seul mot sans majuscule ni point : une étiquette
+    return t if t.endswith((".", "!", "?", "»", ")")) else t + "."
+
+
+def nettoyer_sens(con: sqlite3.Connection) -> dict[str, int]:
+    """Applique `nettoyer_definition` à une base déjà ingérée. Les sens vides sont supprimés, sauf s'ils sont
+    cités par le journal (définition vidée : les jeux les ignorent). Les sens réécrits perdent leur vecteur,
+    que `lem index` recalcule."""
+    bilan = {"nettoyes": 0, "supprimes": 0, "vides_gardes": 0}
+    cites = {r[0] for r in con.execute("SELECT DISTINCT sens_id FROM evenement WHERE sens_id IS NOT NULL")}
+    cites |= {r[0] for r in con.execute("SELECT DISTINCT sens_id FROM trace_etat")}
+    rows = con.execute("SELECT id, definition FROM sens WHERE definition LIKE '%(Ajouter)%' "
+                       "OR definition LIKE '%(définition à vérifier)%'").fetchall()
+    touchees: set[int] = set()
+    for sid, d in rows:
+        propre = nettoyer_definition(d)
+        touchees.add(con.execute("SELECT entree_id FROM sens WHERE id = ?", (sid,)).fetchone()[0])
+        con.execute("DELETE FROM embedding WHERE objet = 'sens' AND objet_id = ?", (sid,))
+        if propre:
+            con.execute("UPDATE sens SET definition = ? WHERE id = ?", (propre, sid))
+            bilan["nettoyes"] += 1
+        elif sid in cites:
+            con.execute("UPDATE sens SET definition = '' WHERE id = ?", (sid,))
+            bilan["vides_gardes"] += 1
+        else:
+            con.execute("DELETE FROM sens WHERE id = ?", (sid,))
+            bilan["supprimes"] += 1
+    # Le vecteur d'une entrée est fait sur sa première définition : à refaire pour les entrées touchées.
+    con.executemany("DELETE FROM embedding WHERE objet = 'entree' AND objet_id = ?", ((e,) for e in touchees))
+    con.commit()
+    return bilan
+
+
 def origine_depuis(etymologie: str) -> str | None:
     m = RE_ORIGINE.search(etymologie or "")
     return m.group(1).lower() if m else ("francais" if etymologie else None)
@@ -289,7 +336,9 @@ def wiktionnaire(con: sqlite3.Connection, path: str | Path, progression: Progres
                 if m.group(1).strip().lower() in connus or RE_DISCIPLINE.match(m.group(1).strip().lower()):
                     domaines.append(m.group(1))
                 definition = definition[m.end():]
-            if not definition.strip():
+            definition = nettoyer_definition(definition) if "(Ajouter)" in definition \
+                or "(définition à vérifier)" in definition else definition
+            if not definition or not definition.strip():
                 continue
             rang += 1
             exemple = next((x.get("text") for x in s.get("examples", []) if x.get("text")), None)

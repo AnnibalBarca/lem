@@ -9,6 +9,7 @@
   lem index                calcule les vecteurs bge-m3 (Ollama) des sens et des entrées
   lem calibrer             mesure les seuils (sens, température) sur la base réelle
   lem noter [--modele M]   notation différée par Claude Code headless (sonnet par défaut)
+  lem nettoyer             retire les gabarits « Définition manquante… » (base déjà ingérée)
   lem rebuild              rejoue tout le journal (FSRS + carte de connaissance)
   lem atlas                imprime l'atlas dans le terminal
 """
@@ -141,6 +142,16 @@ def cmd_noter(args) -> None:
     print(f"{n} réponses notées.")
 
 
+def cmd_nettoyer(args) -> None:
+    from lem import ingest
+
+    b = ingest.nettoyer_sens(_ctx(args).con)
+    print(f"définitions nettoyées : {b['nettoyes']} · sens vides supprimés : {b['supprimes']} · "
+          f"vidés mais gardés (cités par le journal) : {b['vides_gardes']}")
+    if b["nettoyes"]:
+        print("→ `lem index` (avec les mêmes options) recalcule leurs vecteurs.")
+
+
 def cmd_rebuild(args) -> None:
     from lem.memory import scheduler
 
@@ -194,6 +205,7 @@ def main(argv: list[str] | None = None) -> None:
     n.add_argument("--limite", type=int, default=500)
     n.add_argument("--modele", default=argparse.SUPPRESS, help="sonnet | haiku | opus")
     n.set_defaults(f=cmd_noter)
+    sp.add_parser("nettoyer", help="retire les gabarits « Définition manquante… » d'une base déjà ingérée").set_defaults(f=cmd_nettoyer)
     sp.add_parser("rebuild").set_defaults(f=cmd_rebuild)
     sp.add_parser("atlas").set_defaults(f=cmd_atlas)
 

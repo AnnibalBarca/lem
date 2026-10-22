@@ -80,3 +80,32 @@ def test_indexation_restreinte():
                            "WHERE e.zipf > 0 AND s.rang <= 1").fetchone()[0]
     assert n == attendus and 0 < n < con.execute("SELECT COUNT(*) FROM sens").fetchone()[0]
     assert indexer(con, emb, "sens") == con.execute("SELECT COUNT(*) FROM sens").fetchone()[0] - n   # le reste
+
+
+def test_gabarits_du_wiktionnaire():
+    n = ingest.nettoyer_definition
+    assert n("Définition manquante ou à compléter. (Ajouter)…") is None
+    assert n("Toucher. Définition manquante ou à compléter. (Ajouter)") == "Toucher."
+    assert n("Définition manquante ou à compléter. (Ajouter) Pâtisserie japonaise.") == "Pâtisserie japonaise."
+    for vide in ("pronominal Définition manquante ou à compléter. (Ajouter)", "En ski, Définition manquante ou à "
+                 "compléter. (Ajouter)", "Habitant de… Définition manquante ou à compléter. (Ajouter)",
+                 "Exemple d’utilisation manquant. (Ajouter)",
+                 "Définition manquante ou à compléter. (Ajouter) !! Trouver la contenance correcte.!!"):
+        assert n(vide) is None, vide
+
+
+def test_nettoyer_sens_garde_ce_que_le_journal_cite():
+    from lem.journal import Evenement, ecrire
+
+    con = connect(":memory:")
+    eid = con.execute("INSERT INTO entree(forme, pos) VALUES('zist', 'nom')").lastrowid
+    vide = con.execute("INSERT INTO sens(entree_id, rang, definition) VALUES(?, 1, "
+                       "'Définition manquante ou à compléter. (Ajouter)')", (eid,)).lastrowid
+    cite = con.execute("INSERT INTO sens(entree_id, rang, definition) VALUES(?, 2, "
+                       "'Définition manquante ou à compléter. (Ajouter)…')", (eid,)).lastrowid
+    utile = con.execute("INSERT INTO sens(entree_id, rang, definition) VALUES(?, 3, "
+                        "'Coterie. Définition manquante ou à compléter. (Ajouter)')", (eid,)).lastrowid
+    ecrire(con, None, Evenement("cartes", "reponse", entree_id=eid, sens_id=cite, trace="recep"))
+    assert ingest.nettoyer_sens(con) == {"nettoyes": 1, "supprimes": 1, "vides_gardes": 1}
+    defs = dict(con.execute("SELECT id, definition FROM sens").fetchall())
+    assert vide not in defs and defs[cite] == "" and defs[utile] == "Coterie."

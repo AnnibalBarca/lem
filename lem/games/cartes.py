@@ -91,9 +91,13 @@ class PartieCartes:
 
     # -- file ---------------------------------------------------------------
     def _sens_principal(self, entree_id: int, sens_id: int = 0) -> sqlite3.Row | None:
+        # Un sens sans définition (gabarit du Wiktionnaire retiré) ne fait jamais une carte.
         if sens_id:
-            return self.con.execute("SELECT * FROM sens WHERE id = ?", (sens_id,)).fetchone()
-        return self.con.execute("SELECT * FROM sens WHERE entree_id = ? ORDER BY rang LIMIT 1", (entree_id,)).fetchone()
+            s = self.con.execute("SELECT * FROM sens WHERE id = ? AND definition != ''", (sens_id,)).fetchone()
+            if s:
+                return s
+        return self.con.execute("SELECT * FROM sens WHERE entree_id = ? AND definition != '' ORDER BY rang LIMIT 1",
+                                (entree_id,)).fetchone()
 
     def _item(self, exercice: str, entree_id: int, sens_id: int = 0, nouveau: bool = False) -> Item | None:
         e = self.con.execute("SELECT forme, pos FROM entree WHERE id = ?", (entree_id,)).fetchone()
@@ -195,7 +199,7 @@ class PartieCartes:
         if it.exercice == "graphie" and frappe.dictee:
             raise ValueError("la graphie se tape au clavier : une dictée écrit à ta place")
         sens = [(r["id"], r["definition"]) for r in
-                self.con.execute("SELECT id, definition FROM sens WHERE entree_id = ? ORDER BY rang", (it.entree_id,))]
+                self.con.execute("SELECT id, definition FROM sens WHERE entree_id = ? AND definition != '' ORDER BY rang", (it.entree_id,))]
         data = {"exercice": it.exercice, "voisins": it.voisins, "indices": it.indices, "nouveau": it.nouveau,
                 "saisie": frappe.mode}
         recep = prod = None
