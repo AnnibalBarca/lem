@@ -176,6 +176,13 @@ class CarteConnaissance:
             v["p"], v["version"] = sigmoid(x), self._version
         return v["p"]
 
+    def p_de(self, ids) -> list[float]:
+        """P(connu) d'un lot d'entrées : `p_tous` pour celles de la carte, `p` pour les autres."""
+        ids = list(ids)
+        pos = self.positions(ids)
+        p = self.p_tous()
+        return [float(p[k]) if k >= 0 else self.p(i) for i, k in zip(ids, pos)]
+
     @property
     def ids(self) -> np.ndarray:
         if self._vec is None:

@@ -62,7 +62,7 @@ class PartieDecision:
         self.rng = rng or random.Random()
         self.vivier = [r for r in selectionner(con, filtres_depuis(params)) if r["type"] != "nom_propre"]
         lemmes = [normaliser(r[0]) for r in con.execute("SELECT forme FROM entree")]
-        self.reels = {normaliser(r[0]) for r in con.execute("SELECT norme FROM forme")}
+        self.reels = {r[0] for r in con.execute("SELECT norme FROM forme")}   # norme = normaliser(forme)
         self.gen = GenerateurPseudoMots(lemmes, rng=self.rng)
         self.gen.reels |= self.reels
         self.poses: set[int] = set()

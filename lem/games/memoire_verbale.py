@@ -16,6 +16,7 @@ import hashlib
 import random
 import sqlite3
 from dataclasses import dataclass
+from functools import lru_cache
 
 from lem.games.base import Jeu, Param, enregistrer
 from lem.journal import Evenement, Frappe, ajouter_mnemo, ecrire
@@ -38,6 +39,11 @@ MEMOIRE = enregistrer(Jeu(
 LETTRES_RARES = set("kwyzøåæœqxj")
 
 
+@lru_cache(maxsize=None)
+def _diacritique_etranger(c: str) -> bool:
+    return c != normaliser(c) and c not in "éèêàçùûôîïë"
+
+
 def etrangete(forme: str, zipf: float | None, type_: str, origine: str | None) -> float:
     """Score heuristique d'étrangeté lexicale (plus c'est haut, plus c'est abscons)."""
     f = forme.lower()
@@ -48,7 +54,7 @@ def etrangete(forme: str, zipf: float | None, type_: str, origine: str | None) -
     s += 0.5 * sum(c in LETTRES_RARES for c in f)
     s += 0.08 * max(0, len(f) - 8)
     s += 0.4 * (("-" in f) + (" " in f))
-    if any(c != normaliser(c) and c not in "éèêàçùûôîïë" for c in f):
+    if any(_diacritique_etranger(c) for c in f):
         s += 0.8                                        # diacritiques non français
     return s
 

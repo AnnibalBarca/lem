@@ -160,3 +160,13 @@ def test_calcul_vectoriel_identique(con, carte, rng):
     carte.observer(ids[0], 1.0, persister=False)              # θ change : K suit
     n, k = b.solutions("e")
     assert k == pytest.approx(sum(carte.p(e) for e, fs in b.formes_vivier.items() if any("e" in f for f in fs)))
+
+
+def test_meme_terminaison_indexee(con):
+    from lem.confusables import IndexFormel
+
+    index = IndexFormel(con)
+    for forme in ("acronyme", "homonyme", "thuriféraire", "mitose", "abc"):
+        f = normaliser(forme)
+        attendu = [i for i, x in zip(index.ids, index.formes) if len(f) >= 6 and x.endswith(f[-4:]) and x != f][:30]
+        assert index.meme_terminaison(forme) == attendu

@@ -129,7 +129,8 @@ class PartieCartes:
             """SELECT entree_id, COUNT(*) FROM evenement WHERE type IN ('revelation') AND entree_id IS NOT NULL
                GROUP BY entree_id""")}
         cands = [r for r in vivier if r["id"] not in deja and r["p_connu"] < 0.9]
-        cands.sort(key=lambda r: -score_apprentissage(self.carte.p(r["id"]), r["zipf"]) * (1 + 0.5 * reveles.get(r["id"], 0)))
+        p_cands = dict(zip((r["id"] for r in cands), self.carte.p_de(r["id"] for r in cands)))
+        cands.sort(key=lambda r: -score_apprentissage(p_cands[r["id"]], r["zipf"]) * (1 + 0.5 * reveles.get(r["id"], 0)))
         nouveaux = []
         for r in cands[: p["nouveaux"]]:
             premier = "prod" if p["exercice"] == "prod" else "recep"

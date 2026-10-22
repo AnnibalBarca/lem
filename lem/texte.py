@@ -6,6 +6,8 @@ import unicodedata
 
 
 def sans_accents(s: str) -> str:
+    if s.isascii():                     # cas le plus courant : rien à décomposer
+        return s
     return "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
 
 

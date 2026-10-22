@@ -35,6 +35,7 @@ class IndexFormel:
         rows = [r for r in rows if entree_ids is None or r["id"] in entree_ids]
         self.ids = [r["id"] for r in rows]
         self.formes = [normaliser(r["forme"]) for r in rows]
+        self._fins: dict[int, dict[str, list[int]]] = {}
 
     def proches(self, forme: str, k: int = 20, seuil: float = 0.45) -> list[tuple[int, float]]:
         res = process.extract(normaliser(forme), self.formes, scorer=Levenshtein.normalized_similarity,
@@ -45,8 +46,19 @@ class IndexFormel:
         f = normaliser(forme)
         if len(f) < n + 2:
             return []
-        fin = f[-n:]
-        return [i for i, x in zip(self.ids, self.formes) if x.endswith(fin) and x != f][:k]
+        if n not in self._fins:                 # index des terminaisons, construit une fois (ordre conservé)
+            fins: dict[str, list[int]] = {}
+            for j, x in enumerate(self.formes):
+                if len(x) >= n:
+                    fins.setdefault(x[-n:], []).append(j)
+            self._fins[n] = fins
+        out = []
+        for j in self._fins[n].get(f[-n:], ()):
+            if self.formes[j] != f:
+                out.append(self.ids[j])
+                if len(out) == k:
+                    break
+        return out
 
 
 def grappe(con: sqlite3.Connection, entree_id: int, magasin=None, index: IndexFormel | None = None,
