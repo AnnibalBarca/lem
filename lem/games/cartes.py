@@ -13,6 +13,14 @@ Exercices
 
 Après chaque réponse : révélation (sens, voisins confondables et ce qui les distingue), puis
 auto-évaluation 1–4 (Entrée = accepter la note proposée). Tout est écrit au journal ; FSRS est rejoué.
+
+L'ordre des cartes est décidé carte après carte par le planificateur (lem/memory/planificateur.py) :
+  * un mot nouveau est d'abord SONDÉ (mot → sens ; Entrée seule = « je ne sais pas ») : connu, il ne coûte
+    qu'une carte et revient une seule fois, dans 1 à 2 mois ; sinon il entre en apprentissage : retour du
+    sens aux étapes FSRS, duel quelques cartes plus loin, « sens → mot » plus loin encore ;
+  * une carte ratée revient dans la session (étapes FSRS), jamais collée à une carte du même mot ;
+  * le nombre de mots nouveaux suit la charge de révisions à venir ;
+  * l'intention (équilibre, découvrir, consolider, confusables, graphie) règle ces dosages.
 """
 
 from __future__ import annotations
@@ -20,6 +28,7 @@ from __future__ import annotations
 import random
 import sqlite3
 from dataclasses import dataclass, field
+from datetime import timedelta
 
 from lem.confusables import IndexFormel, grappe
 from lem.db import iso, now
@@ -30,6 +39,7 @@ from lem.grading.direct import VerdictProd, VerdictRecep, noter_prod, noter_rece
 from lem.journal import Evenement, Frappe, ajouter_notation, ecrire, nettoyer_saisie
 from lem.memory import scheduler
 from lem.memory.knowledge import Y_PAR_NOTE, CarteConnaissance, score_apprentissage
+from lem.memory.planificateur import Planificateur, Tache
 from lem.orthographe import Diagnostic, accents_manquants, accents_tolerants, diagnostiquer, enregistrer_faute
 
 CARTES = enregistrer(Jeu(
@@ -38,12 +48,17 @@ CARTES = enregistrer(Jeu(
     accroche="Définir, retrouver, distinguer.",
     description="Répétition espacée FSRS : mot → sens, sens → mot, et duels de confusables.",
     params=[
+        Param("intention", "Intention", str, "equilibre",
+              "equilibre | decouvrir (plus de mots nouveaux) | consolider (révisions seules, fragiles d'abord) | "
+              "confusables (mots proches de ceux que tu apprends) | graphie (tes fautes)",
+              choix=("equilibre", "decouvrir", "consolider", "confusables", "graphie")),
+        Param("minutes", "Durée visée (min)", int, 15, "règle le nombre de mots nouveaux selon la charge", 3, 240),
         Param("exercice", "Exercice", str, "mixte", "recep | prod | mixte",
               choix=("recep", "prod", "mixte")),
-        Param("confusables", "Duels de confusables", bool, True, "ajoute des duels après chaque mot nouveau"),
+        Param("confusables", "Duels de confusables", bool, True, "ajoute un duel à chaque mot appris"),
         Param("graphie", "Reprise des fautes de graphie", bool, True, "tes fautes reviennent jusqu'à être justes"),
-        Param("nouveaux", "Mots nouveaux", int, 10, "", 0, 200),
-        Param("revisions_max", "Révisions max", int, 100, "", 0, 2000),
+        Param("nouveaux", "Mots nouveaux (max)", int, 20, "plafond ; la charge de révisions décide en dessous", 0, 200),
+        Param("revisions_max", "Révisions max", int, 150, "", 0, 2000),
         Param("noms_propres", "Noms propres et sigles", bool, False, "les apprendre aussi (prénoms, lieux, sigles)"),
         *PARAMS_FILTRES,
     ],
@@ -64,6 +79,8 @@ class Item:
     nouveau: bool = False
     indices: int = 0
     debut: object = None
+    role: str = "revision"        # sonde | apprentissage | revision | verification | reprise
+    tache: object = None          # la tâche du planificateur qui a produit la carte
 
 
 @dataclass
@@ -89,7 +106,6 @@ class PartieCartes:
         self.session_id = session_id
         self.rng = rng or random.Random()
         self.index = IndexFormel(con, lexique=lexique)
-        self.file: list[Item] = []
         self.construire_file()
 
     # -- file ---------------------------------------------------------------
@@ -123,63 +139,102 @@ class PartieCartes:
         return it
 
     def construire_file(self) -> None:
+        """Remplit les réservoirs du planificateur : révisions dues, mots nouveaux classés, budget."""
         p = self.params
         f = filtres_depuis(p)
+        intention = p.get("intention", "equilibre")
         filtre_actif = any([f.domaines, f.origines, f.types, f.etat != "tous", f.zipf_min, f.zipf_max])
         vivier = selectionner(self.con, f)
         ids = {r["id"] for r in vivier} if filtre_actif else None
         traces = ("recep", "prod") if p["exercice"] == "mixte" else (p["exercice"],)
-        if p.get("graphie", True):
+        if intention == "graphie":
+            traces = ("ortho", "prod")
+        elif p.get("graphie", True):
             traces = (*traces, "ortho")
 
         # Ni prénoms, ni lieux, ni sigles, sauf si on le demande — ni en mots nouveaux, ni en révision.
         exclus = () if p.get("noms_propres") else TYPES_HORS_JEU
-        hors_jeu = {r[0] for r in self.con.execute(
+        self._hors_jeu = {r[0] for r in self.con.execute(
             f"SELECT id FROM entree WHERE type IN ({', '.join('?' * len(exclus))})", exclus)} if exclus else set()
         vivier = [r for r in vivier if r["type"] not in exclus]
 
-        items: list[Item] = []
-        for t in scheduler.dues(self.con, limite=p["revisions_max"], traces=traces, entree_ids=ids):
-            if t.entree_id in hors_jeu:
+        # Révisions : dues maintenant (consolider : aussi les fragiles des deux jours à venir).
+        quand = now() + timedelta(days=2) if intention == "consolider" else now()
+        revisions = []
+        for t in scheduler.dues(self.con, quand, limite=p["revisions_max"], traces=traces, entree_ids=ids):
+            if t.entree_id in self._hors_jeu:
                 continue
-            it = self._item("graphie" if t.trace == "ortho" else t.trace, t.entree_id, t.sens_id, voisins=False)
-            if it:
-                items.append(it)
+            if intention == "decouvrir" and t.retrievabilite > 0.85 and t.statut is None:
+                continue                                   # découvrir : seulement les révisions qui pressent
+            role = "verification" if t.statut == "connu_sonde" else "revision"
+            revisions.append(Tache("graphie" if t.trace == "ortho" else t.trace, t.entree_id, t.sens_id,
+                                   role, r=t.retrievabilite))
+        revisions = _espacer_soeurs(revisions)
 
+        # Budget de mots nouveaux : la capacité de la session moins la charge de révisions à venir.
+        capacite = p.get("minutes", 15) * 60 / 10.0           # ≈ 10 s par carte
+        charge = scheduler.charge(self.con, 7)
+        budget = max(0, min(p["nouveaux"], round((capacite - charge) / 6.0)))   # ≈ 6 cartes la 1re semaine
+        if intention == "decouvrir":
+            budget = p["nouveaux"]
+        elif intention in ("consolider", "graphie"):
+            budget = 0
+
+        candidats = self._classer_candidats(vivier, intention, 6 * max(budget, 1)) if budget else []
+        directions = {"mixte": ("recep", "prod"), "recep": ("recep",), "prod": ("prod",)}[p["exercice"]]
+        self.plan = Planificateur(revisions, candidats, budget, duels=bool(p["confusables"]), directions=directions)
+
+    def _classer_candidats(self, vivier, intention: str, n: int) -> list[int]:
+        """Les mots nouveaux les plus utiles à sonder, du plus au moins prioritaire."""
         deja = {r[0] for r in self.con.execute("SELECT DISTINCT entree_id FROM trace_etat")}
-        reveles = {r[0]: r[1] for r in self.con.execute(
-            """SELECT entree_id, COUNT(*) FROM evenement WHERE type IN ('revelation') AND entree_id IS NOT NULL
-               GROUP BY entree_id""")}
-        cands = [r for r in vivier if r["id"] not in deja and r["p_connu"] < 0.9]
-        p_cands = dict(zip((r["id"] for r in cands), self.carte.p_de(r["id"] for r in cands)))
-        cands.sort(key=lambda r: -score_apprentissage(p_cands[r["id"]], r["zipf"]) * (1 + 0.5 * reveles.get(r["id"], 0)))
-        nouveaux = []
-        for r in cands[: p["nouveaux"]]:
-            premier = "prod" if p["exercice"] == "prod" else "recep"
-            it = self._item(premier, r["id"], nouveau=True)
-            if not it:
-                continue
-            nouveaux.append(it)
-            if p["confusables"] and it.voisins:
-                d = self._duel(it)
-                if d:
-                    nouveaux.append(d)
-            if p["exercice"] == "mixte":
-                prod = self._item("prod", r["id"], nouveau=True)
-                if prod:
-                    nouveaux.append(prod)
-        # Les nouveaux sont intercalés : on n'enchaîne pas recep et prod du même mot.
-        self.rng.shuffle(items)
-        self.file = self._entrelacer(items, nouveaux)
+        cands = [r for r in vivier if r["id"] not in deja]
+        if not cands:
+            return []
+        p_c = dict(zip((r["id"] for r in cands), self.carte.p_de(r["id"] for r in cands)))
+        cands = [r for r in cands if p_c[r["id"]] < 0.9]
+        if intention == "confusables":
+            proches = _proches_des_mots_en_cours(self.con)
+            cands = [r for r in cands if r["id"] in proches] or cands
+        reveles = dict(self.con.execute(
+            """SELECT entree_id, COUNT(*) FROM evenement WHERE type = 'revelation' AND entree_id IS NOT NULL
+               GROUP BY entree_id""").fetchall())
+        levier = _levier_morphemes(self.con)
+        interets = _interets(self.con)
+        dom = _domaines_de(self.con, [r["id"] for r in cands]) if interets else {}
 
-    def _entrelacer(self, revisions: list[Item], nouveaux: list[Item]) -> list[Item]:
-        out, n = [], 0
-        for i, it in enumerate(revisions):
-            out.append(it)
-            if i % 3 == 2 and n < len(nouveaux):
-                out.append(nouveaux[n])
-                n += 1
-        out.extend(nouveaux[n:])
+        def valeur(r):
+            interet = max((interets.get(d, 1.0) for d in dom.get(r["id"], ())), default=1.0)
+            v = score_apprentissage(p_c[r["id"]], r["zipf"], interet, levier.get(r["id"], 0), exploration=0.5)
+            return v * (1 + 0.5 * reveles.get(r["id"], 0))
+
+        cands.sort(key=valeur, reverse=True)
+        return [r["id"] for r in cands[:n]]
+
+    def _item_de(self, t: Tache) -> Item | None:
+        it = self._item(t.exercice if t.exercice != "discrimination" else "recep", t.entree_id, t.sens_id,
+                        nouveau=t.nouveau or t.role in ("sonde", "apprentissage"), voisins=False)
+        if it is None:
+            return None
+        it.role, it.tache = t.role, t
+        if t.exercice == "discrimination":
+            it.voisins, it.voisins_differes = self._voisins(t.entree_id), False
+            d = self._duel(it)
+            if d is None:
+                return None
+            d.role, d.tache = t.role, t
+            return d
+        return it
+
+    @property
+    def file(self) -> list[Item]:
+        """Aperçu des prochaines cartes (ordre approximatif), sans effet sur la session."""
+        out = []
+        for t in self.plan.apercu():
+            it = self._item(t.exercice if t.exercice != "discrimination" else "recep", t.entree_id, t.sens_id,
+                            nouveau=t.nouveau, voisins=False)
+            if it:
+                it.exercice, it.role = t.exercice, t.role
+                out.append(it)
         return out
 
     def _duel(self, it: Item) -> Item | None:
@@ -197,14 +252,19 @@ class PartieCartes:
 
     # -- déroulé ------------------------------------------------------------
     def suivant(self) -> Item | None:
-        if not self.file:
-            return None
-        it = self.file.pop(0)
+        while True:
+            t = self.plan.prochaine(now().timestamp())
+            if t is None:
+                return None
+            it = self._item_de(t)
+            if it is not None:
+                break
         if it.voisins_differes:
             it.voisins, it.voisins_differes = self._voisins(it.entree_id), False
         it.debut = now()
         ecrire(self.con, self.session_id, Evenement("cartes", "stimulus", entree_id=it.entree_id, sens_id=it.sens_id,
-                                                    trace=None, data={"exercice": it.exercice, "nouveau": it.nouveau}))
+                                                    trace=None, data={"exercice": it.exercice, "nouveau": it.nouveau,
+                                                                      "role": it.role}))
         return it
 
     def indice(self, it: Item) -> str:
@@ -221,7 +281,7 @@ class PartieCartes:
         sens = [(r["id"], r["definition"]) for r in
                 self.con.execute("SELECT id, definition FROM sens WHERE entree_id = ? AND definition != '' ORDER BY rang", (it.entree_id,))]
         data = {"exercice": it.exercice, "voisins": it.voisins, "indices": it.indices, "nouveau": it.nouveau,
-                "saisie": frappe.mode}
+                "saisie": frappe.mode, "role": it.role}
         recep = prod = None
         fautes: list[Diagnostic] = []
         if it.exercice == "graphie":
@@ -248,6 +308,8 @@ class PartieCartes:
             note, correct = prod.note_auto, prod.correct
             if correct and it.indices:
                 note = min(note, 2 if it.indices <= len(it.forme) // 3 else 1)
+            elif correct and note == 3 and _rapide(latence_ms, frappe, len(it.forme)):
+                note = 4                                   # retrouvé d'emblée, sans hésitation : facile
             data.update({"mode": prod.mode, "proximite": prod.comparaison.proximite.value if prod.comparaison else None})
             trace = "prod"
             if prod.graphie:
@@ -286,11 +348,7 @@ class PartieCartes:
         if not self.params.get("noms_propres") and self.con.execute(
                 "SELECT type FROM entree WHERE id = ?", (d.entree_id,)).fetchone()[0] in TYPES_HORS_JEU:
             return
-        if any(x.exercice == "graphie" and x.entree_id == d.entree_id for x in self.file):
-            return
-        it = self._item("graphie", d.entree_id)
-        if it:
-            self.file.insert(min(3, len(self.file)), it)
+        self.plan.ajouter(Tache("graphie", d.entree_id, 0, "reprise", apres=self.plan.n + 3))
 
     def recopier(self, res: Resultat, attendu: str, texte: str, latence_ms: int) -> bool:
         """Après une faute : tu retapes la bonne graphie. Journalisé, hors FSRS."""
@@ -300,23 +358,98 @@ class PartieCartes:
             data={"attendu": attendu, "fsrs": False}))
         return ok
 
-    def valider(self, res: Resultat, note_soi: int | None = None) -> None:
-        """Clôt une carte : auto-évaluation éventuelle, carte de connaissance, FSRS.
+    def valider(self, res: Resultat, note_soi: int | None = None) -> str | None:
+        """Clôt une carte : auto-évaluation éventuelle, carte de connaissance, FSRS, suite de la session.
 
         La note retenue est la meilleure disponible (scheduler.note_finale), comme au rejeu : un juge
-        externe (Claude, juge local) passe avant l'auto-évaluation, qui passe avant le cosinus."""
+        externe (Claude, juge local) passe avant l'auto-évaluation, qui passe avant le cosinus.
+        Renvoie la voie du mot après une sonde (« connu » / « apprentissage »), sinon « suivi »."""
+        it = res.item
         if note_soi is not None:
             ajouter_notation(self.con, res.evenement_id, "soi", note=note_soi,
                              brut={"proposee": res.note_proposee})
         note = scheduler.note_finale(self.con, res.evenement_id, res.note_proposee)
-        if res.item.exercice != "graphie":                         # la graphie n'informe pas le sens
-            self.carte.observer(res.item.entree_id, None if note is None else Y_PAR_NOTE[note],
-                                source=f"cartes:{res.item.exercice}", evenement_id=res.evenement_id, depuis_note=True)
-        if res.item.exercice != "discrimination":
-            scheduler.reconstruire(self.con, [res.item.entree_id, *{d.entree_id for d in res.fautes}])
+        if it.exercice != "graphie":                               # la graphie n'informe pas le sens
+            y = None if note is None else Y_PAR_NOTE[note]
+            # Sonde et vérification disent ce que tu savais sans étude : elles corrigent toute la famille du mot.
+            # Une révision ou une étape d'apprentissage ne corrige que le mot.
+            informe = it.role in ("sonde", "verification")
+            self.carte.observer(it.entree_id, y, 1.5 if it.role == "sonde" else 1.0,
+                                source=f"cartes:{it.role}:{it.exercice}", evenement_id=res.evenement_id,
+                                depuis_note=True, propager=informe)
+        if it.exercice != "discrimination":
+            scheduler.reconstruire(self.con, [it.entree_id, *{d.entree_id for d in res.fautes}])
+        voie = None
+        if it.tache is not None:
+            trace = {"graphie": "ortho", "discrimination": None}.get(it.exercice, it.exercice)
+            sens = 0 if trace == "ortho" else it.sens_id
+            ech = scheduler.echeance(self.con, it.entree_id, sens, trace) if trace else None
+            voie = self.plan.apres_reponse(it.tache, now().timestamp(), note, ech.timestamp() if ech else None,
+                                           a_des_voisins=bool(it.voisins))
+        return voie
 
     def restant(self) -> int:
-        return len(self.file)
+        return self.plan.restant()
+
+
+def _rapide(latence_ms: int | None, frappe: Frappe, n_lettres: int) -> bool:
+    """Réponse sans hésitation : première touche en moins d'1,5 s, mot entier en moins de 1,5 s + 0,25 s/lettre."""
+    if latence_ms is None or frappe.dictee:
+        return False
+    pf = frappe.premiere_frappe_ms
+    return latence_ms <= 1500 + 250 * n_lettres and (pf is None or pf <= 1500)
+
+
+def _espacer_soeurs(revs: list[Tache]) -> list[Tache]:
+    """Les traces d'un même mot (sens, mot, graphie) : la plus fragile d'abord, les autres en fin de file."""
+    vus, tete, queue = set(), [], []
+    for t in revs:
+        (queue if t.entree_id in vus else tete).append(t)
+        vus.add(t.entree_id)
+    return tete + queue
+
+
+def _levier_morphemes(con: sqlite3.Connection) -> dict[int, int]:
+    """Pour chaque entrée : combien de mots encore inconnus partagent ses morphèmes."""
+    return dict(con.execute(
+        """WITH inconnus AS (
+               SELECT em.morpheme_id, COUNT(*) AS n FROM entree_morpheme em
+               JOIN connaissance c ON c.entree_id = em.entree_id WHERE c.p_connu < 0.5 GROUP BY em.morpheme_id)
+           SELECT em.entree_id, SUM(i.n) FROM entree_morpheme em JOIN inconnus i ON i.morpheme_id = em.morpheme_id
+           GROUP BY em.entree_id""").fetchall())
+
+
+def _interets(con: sqlite3.Connection) -> dict[str, float]:
+    """Poids d'intérêt par domaine (réglage « interets », ex. {"science": 2, "droit": 0.5}), sous-domaines compris."""
+    from lem.db import domaines_descendants, get_reglage
+
+    brut = get_reglage(con, "interets", {}) or {}
+    out: dict[str, float] = {}
+    for nom, w in brut.items():
+        for did in domaines_descendants(con, [nom]):
+            (n,) = con.execute("SELECT nom FROM domaine WHERE id = ?", (did,)).fetchone()
+            out[n] = float(w)
+    return out
+
+
+def _domaines_de(con: sqlite3.Connection, ids: list[int]) -> dict[int, list[str]]:
+    out: dict[int, list[str]] = {}
+    for i in range(0, len(ids), 900):
+        bloc = ids[i:i + 900]
+        for e, d in con.execute(
+                f"""SELECT DISTINCT s.entree_id, d.nom FROM sens s JOIN sens_domaine sd ON sd.sens_id = s.id
+                    JOIN domaine d ON d.id = sd.domaine_id WHERE s.entree_id IN ({', '.join('?' * len(bloc))})""", bloc):
+            out.setdefault(e, []).append(d)
+    return out
+
+
+def _proches_des_mots_en_cours(con: sqlite3.Connection) -> set[int]:
+    """Mots reliés (paronymes, confusions, synonymes) à ceux que tu apprends ou as confondus."""
+    return {r[0] for r in con.execute(
+        """SELECT r.cible_id FROM relation r JOIN trace_etat t ON t.entree_id = r.source_id
+           WHERE r.type IN ('paronyme', 'confusion_perso', 'synonyme')
+           UNION SELECT r.source_id FROM relation r JOIN trace_etat t ON t.entree_id = r.cible_id
+           WHERE r.type IN ('paronyme', 'confusion_perso', 'synonyme')""")}
 
 
 def resume_session(con: sqlite3.Connection, session_id: int) -> dict:

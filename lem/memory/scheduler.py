@@ -9,6 +9,14 @@ L'état n'est jamais « écrit à la main » : il est rejoué depuis le journal 
 meilleure note disponible pour chaque réponse (humain > Jev > Claude > embedding).
 Une notation différée (Claude en fin de session) se contente donc de rejouer.
 Le fuzzing est désactivé : le rejeu doit être strictement déterministe.
+
+Tri des mots nouveaux (statut de la trace) :
+  * Un mot nouveau est d'abord SONDÉ (rôle « sonde » : mot → sens). Réussi (note ≥ 3), il est connu :
+    pas de parcours d'apprentissage, une seule VÉRIFICATION dans 30 à 60 jours (statut « connu_sonde »).
+  * Vérification réussie : le mot est acquis, retiré des révisions (statut « verifie »).
+    Ratée : il rentre dans le parcours FSRS normal, comme un mot appris.
+  * Sonde ratée ou floue : parcours FSRS normal (étapes d'apprentissage, puis intervalles).
+Comme tout le reste, ces statuts se rejouent : si Claude rejuge une sonde, le mot change de voie.
 """
 
 from __future__ import annotations
@@ -17,9 +25,9 @@ import hashlib
 import json
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from fsrs import Card, Rating, Scheduler
+from fsrs import Card, Rating, Scheduler, State
 
 from lem.db import get_reglage, iso, now, parse_iso
 from lem.journal import rang_correcteur
@@ -44,6 +52,23 @@ def carte_neuve(entree_id: int, sens_id: int, trace: str, quand: datetime) -> Ca
     return Card(card_id=_card_id(entree_id, sens_id, trace), due=quand)
 
 
+STABILITE_CONNU = 45.0            # jours : un mot réussi à la sonde
+VERIFICATION_JOURS = (30, 60)      # la vérification unique tombe entre 1 et 2 mois (déterministe par mot)
+RETRAIT_JOURS = 3650               # un mot vérifié ne revient plus (sauf rejeu qui le remettrait en jeu)
+
+
+def delai_verification(entree_id: int, sens_id: int, trace: str) -> int:
+    lo, hi = VERIFICATION_JOURS
+    h = int.from_bytes(hashlib.blake2b(f"verif:{entree_id}:{sens_id}:{trace}".encode(), digest_size=2).digest(), "big")
+    return lo + h % (hi - lo + 1)
+
+
+def carte_connue(cle: tuple[int, int, str], quand: datetime) -> Card:
+    """État FSRS d'un mot connu dès la sonde : révision lointaine, stabilité élevée."""
+    return Card(card_id=_card_id(*cle), state=State.Review, step=None, stability=STABILITE_CONNU,
+                difficulty=3.0, due=quand + timedelta(days=delai_verification(*cle)), last_review=quand)
+
+
 def note_finale(con: sqlite3.Connection, evenement_id: int, note_auto: int | None) -> int | None:
     """Meilleure note disponible pour une réponse."""
     rows = con.execute(
@@ -56,13 +81,14 @@ def note_finale(con: sqlite3.Connection, evenement_id: int, note_auto: int | Non
     return note_auto
 
 
-def _sauver(con: sqlite3.Connection, entree_id: int, sens_id: int, trace: str, card: Card, reps: int, lapses: int) -> None:
+def _sauver(con: sqlite3.Connection, entree_id: int, sens_id: int, trace: str, card: Card, reps: int, lapses: int,
+            statut: str | None = None) -> None:
     con.execute(
-        """INSERT INTO trace_etat(entree_id, sens_id, trace, card_json, due, stabilite, difficulte, reps, lapses, maj)
-           VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """INSERT INTO trace_etat(entree_id, sens_id, trace, card_json, due, stabilite, difficulte, reps, lapses, maj, statut)
+           VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(entree_id, sens_id, trace) DO UPDATE SET card_json = excluded.card_json, due = excluded.due,
              stabilite = excluded.stabilite, difficulte = excluded.difficulte, reps = excluded.reps,
-             lapses = excluded.lapses, maj = excluded.maj""",
+             lapses = excluded.lapses, maj = excluded.maj, statut = excluded.statut""",
         (
             entree_id,
             sens_id,
@@ -74,33 +100,9 @@ def _sauver(con: sqlite3.Connection, entree_id: int, sens_id: int, trace: str, c
             reps,
             lapses,
             iso(),
+            statut,
         ),
     )
-
-
-def planifier(
-    con: sqlite3.Connection,
-    entree_id: int,
-    sens_id: int | None,
-    trace: str,
-    note: int,
-    quand: datetime | None = None,
-) -> Card:
-    """Chemin rapide en session : applique une note à l'état courant."""
-    quand = quand or now()
-    sens_id = sens_id or 0
-    sched = ordonnanceur(con)
-    row = con.execute(
-        "SELECT card_json, reps, lapses FROM trace_etat WHERE entree_id = ? AND sens_id = ? AND trace = ?",
-        (entree_id, sens_id, trace),
-    ).fetchone()
-    card = Card.from_json(row["card_json"]) if row else carte_neuve(entree_id, sens_id, trace, quand)
-    reps = (row["reps"] if row else 0) + 1
-    lapses = (row["lapses"] if row else 0) + (1 if note == 1 and row else 0)
-    card, _ = sched.review_card(card, Rating(note), quand)
-    _sauver(con, entree_id, sens_id, trace, card, reps, lapses)
-    con.commit()
-    return card
 
 
 def reconstruire(con: sqlite3.Connection, entree_ids: list[int] | None = None) -> int:
@@ -119,22 +121,33 @@ def reconstruire(con: sqlite3.Connection, entree_ids: list[int] | None = None) -
             ORDER BY ts, id""",
         args,
     ).fetchall()
-    etats: dict[tuple[int, int, str], tuple[Card, int, int]] = {}
+    etats: dict[tuple[int, int, str], tuple[Card, int, int, str | None]] = {}
     for r in rows:
-        if json.loads(r["data"]).get("fsrs") is False:
+        data = json.loads(r["data"])
+        if data.get("fsrs") is False:
             continue
         note = note_finale(con, r["id"], r["note_auto"])
         if note is None:
             continue
         cle = (r["entree_id"], r["sens_id"], r["trace"])
         quand = parse_iso(r["ts"])
-        card, reps, lapses = etats.get(cle) or (carte_neuve(*cle, quand), 0, 0)
+        card, reps, lapses, statut = etats.get(cle) or (carte_neuve(*cle, quand), 0, 0, None)
+        role = data.get("role")
         if reps and note == 1:
             lapses += 1
-        card, _ = sched.review_card(card, Rating(note), quand)
-        etats[cle] = (card, reps + 1, lapses)
-    for (eid, sid, trace), (card, reps, lapses) in etats.items():
-        _sauver(con, eid, sid, trace, card, reps, lapses)
+        if role == "sonde" and reps == 0 and note >= 3:
+            card, statut = carte_connue(cle, quand), "connu_sonde"
+        elif statut == "connu_sonde" and note >= 3:
+            # Vérification unique réussie : acquis, on ne le revoit plus.
+            card, _ = sched.review_card(card, Rating(note), quand)
+            card.due, statut = quand + timedelta(days=RETRAIT_JOURS), "verifie"
+        else:
+            card, _ = sched.review_card(card, Rating(note), quand)
+            if statut in ("connu_sonde", "verifie") and note == 1:
+                statut = None                       # oublié : il rentre dans le parcours normal
+        etats[cle] = (card, reps + 1, lapses, statut)
+    for (eid, sid, trace), (card, reps, lapses, statut) in etats.items():
+        _sauver(con, eid, sid, trace, card, reps, lapses, statut)
     con.commit()
     return len(etats)
 
@@ -146,6 +159,7 @@ class TraceDue:
     trace: str
     due: datetime
     retrievabilite: float
+    statut: str | None = None
 
 
 def dues(con: sqlite3.Connection, quand: datetime | None = None, limite: int = 200,
@@ -154,7 +168,7 @@ def dues(con: sqlite3.Connection, quand: datetime | None = None, limite: int = 2
     quand = quand or now()
     sched = ordonnanceur(con)
     rows = con.execute(
-        f"""SELECT entree_id, sens_id, trace, card_json, due FROM trace_etat
+        f"""SELECT entree_id, sens_id, trace, card_json, due, statut FROM trace_etat
             WHERE due <= ? AND trace IN ({', '.join('?' * len(traces))})""",
         (iso(quand), *traces),
     ).fetchall()
@@ -164,9 +178,24 @@ def dues(con: sqlite3.Connection, quand: datetime | None = None, limite: int = 2
             continue
         card = Card.from_json(r["card_json"])
         out.append(TraceDue(r["entree_id"], r["sens_id"], r["trace"], parse_iso(r["due"]),
-                            sched.get_card_retrievability(card, quand)))
+                            sched.get_card_retrievability(card, quand), r["statut"]))
     out.sort(key=lambda t: t.retrievabilite)
     return out[:limite]
+
+
+def echeance(con: sqlite3.Connection, entree_id: int, sens_id: int, trace: str) -> datetime | None:
+    """Prochaine échéance d'une trace (None si elle n'existe pas)."""
+    row = con.execute("SELECT due FROM trace_etat WHERE entree_id = ? AND sens_id = ? AND trace = ?",
+                      (entree_id, sens_id or 0, trace)).fetchone()
+    return parse_iso(row[0]) if row else None
+
+
+def charge(con: sqlite3.Connection, jours: int = 7, quand: datetime | None = None) -> float:
+    """Révisions attendues par jour sur les `jours` prochains jours (dues comprises)."""
+    quand = quand or now()
+    n = con.execute("SELECT COUNT(*) FROM trace_etat WHERE due <= ?",
+                    (iso(quand + timedelta(days=jours)),)).fetchone()[0]
+    return n / jours
 
 
 def retrievabilite(con: sqlite3.Connection, entree_id: int, sens_id: int, trace: str,

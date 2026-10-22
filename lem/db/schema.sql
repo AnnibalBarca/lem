@@ -175,7 +175,8 @@ CREATE TABLE IF NOT EXISTS observation (
     y            REAL,                         -- NULL : en attente d'une note (définition à juger)
     poids        REAL NOT NULL DEFAULT 1,
     source       TEXT NOT NULL DEFAULT '',
-    depuis_note  INTEGER NOT NULL DEFAULT 0
+    depuis_note  INTEGER NOT NULL DEFAULT 0,
+    propager     INTEGER NOT NULL DEFAULT 1        -- 0 : n'informe que le mot (révision d'un mot étudié)
 );
 CREATE INDEX IF NOT EXISTS idx_observation_ts ON observation(ts, id);
 
@@ -207,6 +208,7 @@ CREATE TABLE IF NOT EXISTS trace_etat (
     reps       INTEGER NOT NULL DEFAULT 0,
     lapses     INTEGER NOT NULL DEFAULT 0,
     maj        TEXT NOT NULL,
+    statut     TEXT,                               -- NULL | connu_sonde | verifie (cf. scheduler)
     PRIMARY KEY (entree_id, sens_id, trace)
 );
 CREATE INDEX IF NOT EXISTS idx_trace_due ON trace_etat(due);

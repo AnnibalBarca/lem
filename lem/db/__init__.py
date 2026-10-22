@@ -54,7 +54,8 @@ def connect(path: str | Path | None = None) -> sqlite3.Connection:
 
 
 # Colonnes ajoutées après coup : (table, colonne, type). Appliquées aux bases existantes.
-MIGRATIONS = [("evenement", "mode_saisie", "TEXT")]
+MIGRATIONS = [("evenement", "mode_saisie", "TEXT"), ("trace_etat", "statut", "TEXT"),
+              ("observation", "propager", "INTEGER NOT NULL DEFAULT 1")]
 
 
 def init_schema(con: sqlite3.Connection) -> None:

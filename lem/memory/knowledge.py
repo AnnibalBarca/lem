@@ -263,28 +263,33 @@ class CarteConnaissance:
 
     # -- écriture ---------------------------------------------------------
     def observer(self, entree_id: int, y: float | None, poids: float = 1.0, persister: bool = True, *,
-                 source: str = "", evenement_id: int | None = None, depuis_note: bool = False) -> float:
+                 source: str = "", evenement_id: int | None = None, depuis_note: bool = False,
+                 propager: bool = True) -> float:
         """Intègre une observation y ∈ [0, 1] (1 = connu), l'écrit au journal. Renvoie le nouveau P.
 
         depuis_note : y vient de la note de `evenement_id` ; au rejeu, la meilleure note disponible la remplace.
-        y = None (avec depuis_note) : observation en attente, appliquée au rejeu une fois la réponse notée."""
+        y = None (avec depuis_note) : observation en attente, appliquée au rejeu une fois la réponse notée.
+        propager = False : la réponse porte sur un mot qu'on ÉTUDIE (révision, étape d'apprentissage) ; elle dit
+        ce que tu viens d'apprendre, pas ce que tu savais : seul le résidu du mot bouge, pas les θ de ses familles
+        (sinon chaque révision réussie ferait croire que tout le lexique est connu)."""
         if persister:
             self.con.execute(
-                "INSERT INTO observation(ts, evenement_id, entree_id, y, poids, source, depuis_note) VALUES(?, ?, ?, ?, ?, ?, ?)",
-                (iso(now()), evenement_id, entree_id, y, poids, source, int(depuis_note)))
+                """INSERT INTO observation(ts, evenement_id, entree_id, y, poids, source, depuis_note, propager)
+                   VALUES(?, ?, ?, ?, ?, ?, ?, ?)""",
+                (iso(now()), evenement_id, entree_id, y, poids, source, int(depuis_note), int(propager)))
         if y is None:
             if persister:
                 self.con.commit()
             return self.p(entree_id)
-        nouveau = self._appliquer(entree_id, y, poids)
+        nouveau = self._appliquer(entree_id, y, poids, propager)
         if persister:
             self._persister(entree_id, nouveau)
         return nouveau
 
-    def _appliquer(self, entree_id: int, y: float, poids: float) -> float:
+    def _appliquer(self, entree_id: int, y: float, poids: float, propager: bool = True) -> float:
         p = self.p(entree_id)
         err = (y - p) * poids
-        for d in self.dimensions(entree_id):
+        for d in (self.dimensions(entree_id) if propager else ()):
             famille = d.split(":", 1)[0]
             lr = LR.get(famille, 0.1) / (1.0 + self.n_theta[d] / TAU)
             self.theta[d] = max(-THETA_MAX, min(THETA_MAX, self.theta.get(d, 0.0) + lr * err))
@@ -302,7 +307,7 @@ class CarteConnaissance:
         from lem.memory.scheduler import note_finale
 
         rows = self.con.execute(
-            """SELECT o.entree_id, o.y, o.poids, o.depuis_note, o.evenement_id, e.note_auto FROM observation o
+            """SELECT o.entree_id, o.y, o.poids, o.depuis_note, o.propager, o.evenement_id, e.note_auto FROM observation o
                LEFT JOIN evenement e ON e.id = o.evenement_id ORDER BY o.ts, o.id""").fetchall()
         self.theta.clear()
         self.n_theta.clear()
@@ -317,7 +322,7 @@ class CarteConnaissance:
                 if n is not None:
                     y = Y_PAR_NOTE[n]
             if y is not None:
-                self._appliquer(r["entree_id"], y, r["poids"])
+                self._appliquer(r["entree_id"], y, r["poids"], bool(r["propager"]))
         self._version += 1
         maj = iso()
         self.con.execute("DELETE FROM theta")
@@ -369,16 +374,19 @@ class CarteConnaissance:
 Y_PAR_NOTE = {1: 0.15, 2: 0.6, 3: 0.9, 4: 1.0}
 
 
-def score_apprentissage(p: float, zipf: float | None, interet: float = 1.0, famille_inconnue: int = 0) -> float:
-    """Priorité d'un mot nouveau : ce qui manque × ce qui sert × ce qui débloque.
+def score_apprentissage(p: float, zipf: float | None, interet: float = 1.0, famille_inconnue: int = 0,
+                        exploration: float = 0.0) -> float:
+    """Priorité d'un mot nouveau : ce qui manque × ce qui sert × ce qui débloque, + ce qu'on apprendrait sur toi.
 
     (1 − p)              : on n'apprend pas ce qu'on sait déjà.
     zone proximale       : les mots flous (p ~ 0.2–0.6, « turiféraire ») sont les moins chers à consolider.
     utilité              : fréquence et intérêt du domaine.
     levier               : nombre de mots inconnus partageant ses morphèmes.
+    exploration          : p(1 − p) est l'information qu'apporte la sonde sur ta carte (maximale à p = 0,5) ;
+                           une sonde réussie coûte une carte et corrige θ pour toute la famille du mot.
     """
     z = 0.0 if zipf is None else zipf
     proximal = 0.5 + 2.0 * p * (1 - p)
     utilite = interet * (0.6 + z / 6.0)
     levier = 1.0 + 0.3 * math.log1p(famille_inconnue)
-    return (1 - p) * proximal * utilite * levier
+    return (1 - p) * proximal * utilite * levier + exploration * p * (1 - p) * utilite

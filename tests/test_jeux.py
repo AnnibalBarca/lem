@@ -255,7 +255,8 @@ def test_cartes_sans_noms_propres(con, carte, rng):
     assert all(it.entree_id != pp for it in partie.file)                       # jamais en mot nouveau
     partie._insister(Diagnostic("pouligni", "pouligny-saint-pierre", pp, 1, ["substitution"], False, 0.9))
     assert all(it.entree_id != pp for it in partie.file)                       # ni en reprise de graphie
-    partie2 = PartieCartes(con, params("cartes", nouveaux=200, confusables=False, noms_propres=True), carte, rng=rng)
+    partie2 = PartieCartes(con, params("cartes", nouveaux=200, confusables=False, noms_propres=True,
+                                     intention="decouvrir"), carte, rng=rng)
     assert any(it.entree_id == pp for it in partie2.file)
 
 
