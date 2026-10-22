@@ -94,3 +94,42 @@ async def test_tui_parcours(tmp_path, monkeypatch):
     con = connect(chemin)
     assert con.execute("SELECT COUNT(*) FROM session").fetchone()[0] == 2
     assert con.execute("SELECT COUNT(*) FROM evenement WHERE jeu = 'cartes' AND type = 'reponse'").fetchone()[0] == 1
+
+
+async def test_cartes_fleches_et_avance_auto(tmp_path):
+    from lem.cli import main
+    from lem.contexte import Contexte
+    from lem.games.cartes import Item
+    from lem.tui.app import EcranCartes, LemApp
+
+    chemin = tmp_path / "t.sqlite"
+    main(["--db", str(chemin), "demo", "--sans-jeu"])
+    app = LemApp(Contexte(chemin))
+    async with app.run_test(size=(110, 50)) as pilot:
+        await pilot.pause(1.6)
+        await pilot.press("enter", "j")
+        ecran = app.screen
+        assert isinstance(ecran, EcranCartes)
+        while not ecran.pret:
+            await pilot.pause(0.05)
+        # Duel : ↓ ↓ puis Entrée choisit la 3e option.
+        it = ecran.partie._item("recep", ecran.item.entree_id)
+        autres = [(i, f) for i, f in ecran.ctx.con.execute("SELECT id, forme FROM entree WHERE id != ? LIMIT 3",
+                                                            (it.entree_id,))]
+        ecran.item = Item("discrimination", it.entree_id, it.sens_id, it.forme, it.pos, it.definition, [],
+                          options=[autres[0], autres[1], (it.entree_id, it.forme), autres[2]])
+        ecran.resultat = None
+        ecran.choix = 0
+        await pilot.press("down", "down", "enter")
+        assert ecran.resultat is not None and ecran.resultat.correct
+        faits = ecran.faits
+        await pilot.pause(ecran.AVANCE_AUTO + 0.4)            # juste : la carte suivante vient seule
+        assert ecran.faits == faits + 1
+        # Sens → mot juste, sans accent : avance aussi toute seule.
+        it = ecran.partie._item("prod", ecran.partie.con.execute(
+            "SELECT id FROM entree WHERE forme = 'éminent'").fetchone()[0])
+        ecran.item, ecran.resultat = it, None
+        await pilot.press(*"eminent", "enter")
+        assert ecran.resultat.correct
+        await pilot.pause(ecran.AVANCE_AUTO + 0.4)
+        assert ecran.faits == faits + 2

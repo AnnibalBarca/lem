@@ -394,7 +394,10 @@ class EcranPartie(Screen):
 # ── Cartes ──────────────────────────────────────────────────────────────────────────────────────
 
 class EcranCartes(EcranPartie):
-    BINDINGS = [Binding("escape", "quitter", "Menu"), Binding("tab", "indice", "Indice (lettre)", priority=True)]
+    BINDINGS = [Binding("escape", "quitter", "Menu"), Binding("tab", "indice", "Indice (lettre)", priority=True),
+                Binding("up", "choix(-1)", "Choix", show=False, priority=True),
+                Binding("down", "choix(1)", "Choix", show=False, priority=True)]
+    AVANCE_AUTO = 0.8          # secondes de ✓ à l'écran avant la carte suivante, quand le mot est juste
 
     def construire(self):
         from lem.games.cartes import PartieCartes
@@ -453,12 +456,25 @@ class EcranCartes(EcranPartie):
                                                          style=SOMBRE)
             saisie.placeholder = "le mot…"
         else:
-            st = Text(it.definition + "\n\n", style=BLANC)
-            for i, (_, f) in enumerate(it.options, 1):
-                st += Text(f"  {i}  ", style=f"bold {BLANC}") + Text(f"{f}\n", style=BLANC)
-            saisie.placeholder = "numéro…"
+            self.choix = 0
+            st = self._options()
+            saisie.placeholder = "↑ ↓ puis Entrée, ou un numéro…"
         self.maj("stimulus", st)
         self.chrono.reset()
+
+    def _options(self) -> Text:
+        it = self.item
+        st = Text(it.definition + "\n\n", style=BLANC)
+        for i, (_, f) in enumerate(it.options):
+            choisi = i == self.choix
+            st += Text(f" {'›' if choisi else ' '} {i + 1}  ", style=f"bold {BLANC}" if choisi else GRIS)
+            st += Text(f"{f}\n", style=f"bold {BLANC}" if choisi else BLANC)
+        return st
+
+    def action_choix(self, pas: int) -> None:
+        if self.pret and self.item and self.item.exercice == "discrimination" and self.resultat is None:
+            self.choix = (self.choix + pas) % len(self.item.options)
+            self.maj("stimulus", self._options())
 
     def action_indice(self) -> None:
         if self.pret and self.item and self.item.exercice == "prod" and self.resultat is None:
@@ -474,17 +490,30 @@ class EcranCartes(EcranPartie):
             if self.item.exercice == "graphie" and frappe.dictee:
                 self._clavier_exige()
                 return
+            if self.item.exercice == "discrimination" and not texte.strip():
+                texte = str(self.choix + 1)                 # Entrée sur l'option choisie aux flèches
             self.resultat = self.partie.repondre(self.item, texte, lat, frappe)
             self.recopies = list(dict.fromkeys(d.correcte for d in self.resultat.fautes))
             self._reveler()
             self._demander_recopie()
+            if self.resultat.correct and not self.recopies and self.item.exercice in ("prod", "graphie", "discrimination"):
+                self._auto = self.set_timer(self.AVANCE_AUTO, lambda: self._avancer(None))
         elif self.recopies:
             self._recopie(texte)
         else:
             note = int(texte) if texte.strip() in {"1", "2", "3", "4"} and self.item.exercice != "graphie" else None
-            self.partie.valider(self.resultat, note)
-            self.faits += 1
-            self.suivant()
+            self._avancer(note)
+
+    def _avancer(self, note: int | None) -> None:
+        """Clôt la carte et passe à la suivante (une seule fois, qu'on ait tapé Entrée ou attendu)."""
+        if getattr(self, "_auto", None) is not None:
+            self._auto.stop()
+            self._auto = None
+        if self.resultat is None or not self.is_mounted:
+            return
+        self.partie.valider(self.resultat, note)
+        self.faits += 1
+        self.suivant()
 
     def _demander_recopie(self) -> None:
         saisie = self.query_one("#saisie", Input)
