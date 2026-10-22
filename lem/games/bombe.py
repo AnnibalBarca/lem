@@ -2,18 +2,19 @@
 
 Modes
   libre         : comme JKLM — une suite de lettres, n'importe quel mot français qui la contient.
-  apprentissage : la suite de lettres est tirée d'un mot CIBLE (flou ou en cours d'apprentissage).
-                  Tout mot valide fait passer la bombe, mais tant que la cible n'est pas trouvée,
-                  la même suite revient — puis s'allonge vers la cible.
+  apprentissage : la suite de lettres est tirée d'un mot CIBLE : pour moitié un mot étudié dans les
+                  Cartes (le plus tôt dû d'abord), sinon un mot flou ou utile. Tout mot valide fait
+                  passer la bombe.
   confusables   : la cible est choisie dans une grappe de confusables et la suite de lettres est
                   prise dans leur partie commune (-onym- → homonyme, paronyme, éponyme…).
 
-Combien de fois répéter une suite ? Selon K = Σ P(connu) des mots du filtre qui la contiennent :
-  K ≥ k_haut (300)      → pas de répétition : trop de solutions, aucun intérêt ;
-  K ≤ repetitions_max   → répéter ⌈K⌉ fois (« si j'en connais 5, la proposer 5 fois ») ;
-  entre les deux        → interpolation logarithmique.
-À chaque mot donné qui n'est pas la cible : la suite s'allonge d'une lettre vers la cible, en
-évitant d'être contenue dans le mot que tu viens de donner. Arrivée au mot entier : révélation.
+Une cible ne paraît qu'une fois par partie. Ratée, elle revient UNE fois, plus tard (`ecart` invites),
+avec une suite plus longue qui ne désigne plus qu'elle ou quelques mots : un rappel espacé, pas un
+allongement immédiat de la même suite. Elle n'est révélée que si elle était à portée (au plus
+`revelation_max` solutions) ; sinon la suite était une suite libre comme une autre.
+
+Comme JKLM, ni noms propres ni sigles (ni comme cibles ni comme réponses) ; une graphie qui est aussi un
+nom commun reste valide (« angélique » oui, « anvers » non). Le paramètre `noms_propres` les réadmet.
 
 Chaque mot donné est comparé à la cible : « Presque pareil ! » (rouge), « Similaire par le sens »
 (orange), etc. — ce n'est pas un hasard, c'est un voisin dans TA mémoire.
@@ -21,8 +22,8 @@ Chaque mot donné est comparé à la cible : « Presque pareil ! » (rouge), « 
 
 from __future__ import annotations
 
-import math
 import random
+import re
 import sqlite3
 import statistics
 from collections import deque
@@ -57,19 +58,17 @@ BOMBE = enregistrer(Jeu(
               choix=("aucun", "alphabet", "mot_rare")),
         Param("temps_min", "Bombe min (s)", float, 6.0, "", 1, 120),
         Param("temps_max", "Bombe max (s)", float, 14.0, "", 1, 300),
-        Param("k_haut", "Seuil sans répétition", int, 300, "au-delà, la suite ne revient pas", 2, 100_000),
-        Param("repetitions_max", "Répétitions max", int, 5, "", 0, 20),
+        Param("retours", "Retours d'une cible ratée", int, 1, "une cible ratée revient plus tard, une fois", 0, 3),
+        Param("ecart", "Écart avant retour", int, 8, "nombre d'invites avant le retour d'une cible ratée", 2, 100),
+        Param("revelation_max", "Révélation si ≤ solutions", int, 30, "la cible n'est révélée que si elle était à portée", 1, 10_000),
+        Param("revision", "Part de révision", float, 0.5, "part des cibles prises parmi les mots étudiés dans les Cartes", 0, 1),
+        Param("noms_propres", "Noms propres et sigles", bool, False, "les accepter (JKLM les refuse)"),
         Param("adaptatif", "Adaptatif", bool, True, "ajuste difficulté et durée à ta réussite"),
     ],
 ))
 
 
-def budget_repetitions(k: float, k_haut: float, r_max: int) -> int:
-    if r_max <= 0 or k >= k_haut:
-        return 0
-    if k <= r_max:
-        return max(1, math.ceil(k))
-    return max(1, round(r_max * math.log(k_haut / k) / math.log(k_haut / r_max)))
+TYPES_HORS_JEU = ("nom_propre", "sigle")
 
 
 @dataclass
@@ -77,7 +76,7 @@ class Invite:
     suite: str                      # normalisée
     cible_id: int | None = None
     cible_forme: str | None = None
-    repetitions: int = 0            # répétitions restantes
+    repetitions: int = 0            # retours restants si la cible est ratée
     k: float = 0.0                  # mots connus attendus contenant la suite
     n_solutions: int = 0
     duree: float = 10.0
@@ -113,12 +112,18 @@ class PartieBombe:
         self.historique: deque[bool] = deque(maxlen=10)
         self.latences: deque[int] = deque(maxlen=10)
         self.difficulte = 0.5
+        self.n_invites = 0
+        self.cibles_vues: set[int] = set()
+        self.retours: list[tuple[int, int, int, int]] = []   # (échéance, cible, longueur de suite, retours restants)
         self.facteur_temps = 1.0
         self._univers()
         self.reconfigurer()
         self.invite: Invite = self.nouvelle_invite()
 
     # -- données ------------------------------------------------------------
+    def _exclus(self) -> tuple[str, ...]:
+        return () if self.params.get("noms_propres") else TYPES_HORS_JEU
+
     def _univers(self) -> None:
         """Toutes les formes valides du français (comme JKLM, indépendamment des filtres).
 
@@ -129,7 +134,11 @@ class PartieBombe:
         # 2 M formes relit le disque sous WSL2 (le cache de pages est rendu à Windows) : 3 s par faute.
         self._normes: dict[str, str | tuple[str, ...]] = {}
         get, getn = self.valides.get, self._normes.get
-        for forme, norme, eid in self.con.execute("SELECT forme, norme, entree_id FROM forme"):
+        exclus = self._exclus_univers = self._exclus()
+        for forme, norme, eid, type_ in self.con.execute(
+                "SELECT f.forme, f.norme, f.entree_id, e.type FROM forme f JOIN entree e ON e.id = f.entree_id"):
+            if type_ in exclus:
+                continue
             ids = get(forme)
             self.valides[forme] = (eid,) if ids is None else ids + (eid,)
             fs = getn(norme)
@@ -141,8 +150,11 @@ class PartieBombe:
 
     def reconfigurer(self) -> None:
         """(Re)construit le vivier après un changement de paramètres (/domaine, /etat…)."""
+        if self._exclus() != self._exclus_univers:
+            self._univers()
+        exclus = self._exclus()
         rows = selectionner(self.con, filtres_depuis(self.params))
-        self.vivier = {r["id"]: r for r in rows}
+        self.vivier = {r["id"]: r for r in rows if r["type"] not in exclus}
         formes: dict[int, list[str]] = {}
         if len(self.vivier) > 50_000:
             # Vivier large (sans filtre : tout le lexique) : un seul parcours de l'index plutôt que des IN.
@@ -166,6 +178,11 @@ class PartieBombe:
         self._n_cache: dict[str, int] = {}
         self._cibles = [r for r in self.vivier.values() if len(r["forme"]) >= self.params["long_min"] + 1
                         and r["forme"].replace("-", "").isalpha()]
+        # Mots étudiés dans les Cartes, du plus tôt dû au plus tard : la Bombe sert aussi à les rappeler.
+        cibles = {r["id"] for r in self._cibles}
+        self._etudies = [r[0] for r in self.con.execute(
+            """SELECT entree_id FROM trace_etat WHERE trace IN ('recep', 'prod')
+               GROUP BY entree_id ORDER BY MIN(due)""") if r[0] in cibles]
         self.index = IndexFormel(self.con, set(self.vivier)) if self.params["mode"] == "confusables" else None
 
     def solutions(self, suite: str) -> tuple[int, float]:
@@ -218,7 +235,10 @@ class PartieBombe:
         return Invite("e", k=0, n_solutions=0, duree=self._duree())
 
     def _choisir_cible(self) -> sqlite3.Row | None:
-        cands = self._cibles
+        etudies = [i for i in self._etudies if i not in self.cibles_vues]
+        if etudies and self.rng.random() < self.params.get("revision", 0.5):
+            return self.vivier[self.rng.choice(etudies[:5])]
+        cands = [r for r in self._cibles if r["id"] not in self.cibles_vues]
         if not cands:
             return None
         # difficulté ∈ [0, 1] : 0 → cibles plutôt connues, 1 → plutôt inconnues.
@@ -230,57 +250,59 @@ class PartieBombe:
         echantillon.sort(key=poids, reverse=True)
         return self.rng.choice(echantillon[: max(1, len(echantillon) // 10)])
 
-    def _suite_distinctive(self, forme: str, communs: list[str] | None = None) -> str:
+    def _suite_distinctive(self, forme: str, communs: list[str] | None = None, longueur: int | None = None) -> str:
         f = normaliser(forme)
-        L = min(self._longueur(), len(f) - 1)
+        L = min(longueur or self._longueur(), len(f) - 1)
         subs = {f[i : i + L] for i in range(len(f) - L + 1) if f[i : i + L].isalpha()}
         if communs:
             partages = [s for s in subs if sum(s in normaliser(c) for c in communs) >= 1]
             if partages:
                 subs = set(partages)
-        if not subs:
-            return f[:L]
+        if not subs:                            # jamais de trait d'union ni d'espace dans une suite
+            segment = max((x for x in re.split(r"[^a-z]+", f) if x), key=len, default=f)
+            return segment[:L]
         return min(subs, key=lambda s: (self.n_solutions(s) if communs is None else -sum(
             s in normaliser(c) for c in communs), self.rng.random()))
 
     def nouvelle_invite(self) -> Invite:
         mode = self.params["mode"]
+        self.n_invites += 1
         if mode == "libre":
             return self._invite_libre()
+        retour = next((r for r in self.retours if r[0] <= self.n_invites and r[1] in self.vivier), None)
+        if retour is not None:
+            self.retours.remove(retour)
+            _, cid, longueur, reste = retour
+            cible = self.vivier[cid]
+            # Le retour doit désigner la cible ou presque : on allonge jusqu'à être à portée.
+            plafond = self.params.get("revelation_max", 30)
+            s = self._suite_distinctive(cible["forme"], longueur=longueur)
+            for L in range(longueur + 1, len(normaliser(cible["forme"]))):
+                if self.n_solutions(s) <= plafond:
+                    break
+                s = self._suite_distinctive(cible["forme"], longueur=L)
+            n, k = self.solutions(s)
+            inv = Invite(s, cid, cible["forme"], reste, k, n, self._duree())
+            ecrire(self.con, self.session_id, Evenement(
+                "bombe", "stimulus", entree_id=cid, data={"suite": s, "k": round(k, 2), "n": n, "retour": True,
+                                                          "repetitions": reste, "mode": mode}))
+            return inv
         cible = self._choisir_cible()
         if cible is None:
             return self._invite_libre()
+        self.cibles_vues.add(cible["id"])
         communs = None
         if mode == "confusables" and self.index is not None:
             from lem.confusables import grappe
             communs = [c.forme for c in grappe(self.con, cible["id"], self.magasin, self.index, k=6)]
         s = self._suite_distinctive(cible["forme"], communs)
         n, k = self.solutions(s)
-        reps = budget_repetitions(k, self.params["k_haut"], self.params["repetitions_max"])
+        reps = self.params.get("retours", 1)
         inv = Invite(s, cible["id"], cible["forme"], reps, k, n, self._duree())
         ecrire(self.con, self.session_id, Evenement(
             "bombe", "stimulus", entree_id=cible["id"], data={"suite": s, "k": round(k, 2), "n": n,
                                                               "repetitions": reps, "mode": mode}))
         return inv
-
-    def etendre(self, suite: str, cible: str, evite: list[str]) -> str | None:
-        """Allonge la suite vers la cible, en évitant les mots déjà donnés. None = mot entier atteint."""
-        c = normaliser(cible)
-        i = c.find(suite)
-        if i < 0 or len(suite) >= len(c):
-            return None
-        pas = 2 if self.params.get("adaptatif") and self.difficulte < 0.3 else 1
-        cands = []
-        for g in range(pas + 1):
-            d = pas - g
-            if i - g >= 0 and i + len(suite) + d <= len(c):
-                cands.append(c[i - g : i + len(suite) + d])
-        cands = [x for x in cands if x != suite] or [c[max(0, i - 1) : i + len(suite) + 1]]
-        if any(len(x) >= len(c) for x in cands):
-            return None
-        evite_n = [normaliser(e) for e in evite]
-        cands.sort(key=lambda x: (sum(x in e for e in evite_n), self.n_solutions(x)))
-        return cands[0]
 
     # -- tour de jeu ---------------------------------------------------------
     def _valider(self, texte: str) -> tuple[str | None, set[int]]:
@@ -398,6 +420,7 @@ class PartieBombe:
         return False
 
     def _apres_echec_cible(self, donne: str | None) -> tuple[str, str] | None:
+        """La cible n'est pas sortie : retour programmé plus tard, révélation seulement si elle était à portée."""
         inv = self.invite
         if inv.cible_id is None:
             self.invite = self.nouvelle_invite()
@@ -405,21 +428,17 @@ class PartieBombe:
         if donne:
             inv.donnes.append(donne)
         if inv.repetitions > 0:
-            inv.repetitions -= 1
-            nouvelle = self.etendre(inv.suite, inv.cible_forme, inv.donnes)
-            if nouvelle is not None:
-                inv.suite = nouvelle
-                inv.n_solutions, inv.k = self.solutions(nouvelle)
-                inv.duree = self._duree()
-                return None
-        # Révélation : la cible n'est pas sortie.
-        self.historique.append(False)
-        self.carte.observer(inv.cible_id, 0.4, poids=0.3)
-        d = self.con.execute("SELECT definition FROM sens WHERE entree_id = ? ORDER BY rang LIMIT 1",
-                             (inv.cible_id,)).fetchone()
-        ecrire(self.con, self.session_id, Evenement("bombe", "revelation", entree_id=inv.cible_id,
-                                                    data={"suite": inv.suite, "donnes": inv.donnes}))
-        rev = (inv.cible_forme, d["definition"] if d else "")
+            self.retours.append((self.n_invites + self.params.get("ecart", 8), inv.cible_id,
+                                 len(inv.suite) + 1, inv.repetitions - 1))
+        rev = None
+        if inv.n_solutions <= self.params.get("revelation_max", 30):
+            self.historique.append(False)
+            self.carte.observer(inv.cible_id, 0.4, poids=0.3)
+            d = self.con.execute("SELECT definition FROM sens WHERE entree_id = ? ORDER BY rang LIMIT 1",
+                                 (inv.cible_id,)).fetchone()
+            ecrire(self.con, self.session_id, Evenement("bombe", "revelation", entree_id=inv.cible_id,
+                                                        data={"suite": inv.suite, "donnes": inv.donnes}))
+            rev = (inv.cible_forme, d["definition"] if d else "")
         self._adapter()
         self.invite = self.nouvelle_invite()
         return rev

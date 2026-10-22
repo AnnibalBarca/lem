@@ -4,7 +4,6 @@ from datetime import timedelta
 import pytest
 
 from lem.db import now
-from lem.games.bombe import budget_repetitions
 from lem.grading.direct import decouper_synonymes, noter_prod, noter_recep
 from lem.journal import Evenement, ajouter_notation, ecrire
 from lem.memory import scheduler
@@ -73,11 +72,6 @@ def test_similarite_formelle():
     assert etiqueter(0.8, 0.1) == Proximite.FORME
     assert etiqueter(0.1, 0.1, memoire=1) == Proximite.MEMOIRE
     assert etiqueter(0.1, None) == Proximite.AUCUNE
-
-
-@pytest.mark.parametrize("k,attendu", [(1000, 0), (300, 0), (5, 5), (2.2, 3), (0.3, 1), (50, 2)])
-def test_budget_repetitions(k, attendu):
-    assert budget_repetitions(k, 300, 5) == attendu
 
 
 def test_synonymes_vs_phrase():
