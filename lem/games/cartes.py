@@ -59,6 +59,7 @@ class Item:
     pos: str
     definition: str
     voisins: list[dict] = field(default_factory=list)     # [{mot, definition, proximite}]
+    voisins_differes: bool = False                        # grappe à calculer quand la carte sort
     options: list[tuple[int, str]] = field(default_factory=list)
     nouveau: bool = False
     indices: int = 0
@@ -101,18 +102,25 @@ class PartieCartes:
         return self.con.execute("SELECT * FROM sens WHERE entree_id = ? AND definition != '' ORDER BY rang LIMIT 1",
                                 (entree_id,)).fetchone()
 
-    def _item(self, exercice: str, entree_id: int, sens_id: int = 0, nouveau: bool = False) -> Item | None:
-        e = self.con.execute("SELECT forme, pos FROM entree WHERE id = ?", (entree_id,)).fetchone()
-        s = self._sens_principal(entree_id, sens_id)
-        if e is None or s is None:
-            return None
+    def _voisins(self, entree_id: int) -> list[dict]:
         voisins = []
         for c in grappe(self.con, entree_id, self.magasin_entrees, self.index, k=5):
             d = self._sens_principal(c.entree_id)
             if d:
                 voisins.append({"mot": c.forme, "definition": d["definition"], "proximite": c.comparaison.proximite.value})
-        return Item(exercice, entree_id, s["id"], e["forme"], e["pos"],
-                    s["definition_precise"] or s["definition"], voisins, nouveau=nouveau)
+        return voisins
+
+    def _item(self, exercice: str, entree_id: int, sens_id: int = 0, nouveau: bool = False,
+              voisins: bool = True) -> Item | None:
+        """voisins=False : grappe de confusables calculée seulement quand la carte sort (`suivant`)."""
+        e = self.con.execute("SELECT forme, pos FROM entree WHERE id = ?", (entree_id,)).fetchone()
+        s = self._sens_principal(entree_id, sens_id)
+        if e is None or s is None:
+            return None
+        it = Item(exercice, entree_id, s["id"], e["forme"], e["pos"],
+                  s["definition_precise"] or s["definition"], self._voisins(entree_id) if voisins else [], nouveau=nouveau)
+        it.voisins_differes = not voisins
+        return it
 
     def construire_file(self) -> None:
         p = self.params
@@ -134,7 +142,7 @@ class PartieCartes:
         for t in scheduler.dues(self.con, limite=p["revisions_max"], traces=traces, entree_ids=ids):
             if t.entree_id in hors_jeu:
                 continue
-            it = self._item("graphie" if t.trace == "ortho" else t.trace, t.entree_id, t.sens_id)
+            it = self._item("graphie" if t.trace == "ortho" else t.trace, t.entree_id, t.sens_id, voisins=False)
             if it:
                 items.append(it)
 
@@ -192,6 +200,8 @@ class PartieCartes:
         if not self.file:
             return None
         it = self.file.pop(0)
+        if it.voisins_differes:
+            it.voisins, it.voisins_differes = self._voisins(it.entree_id), False
         it.debut = now()
         ecrire(self.con, self.session_id, Evenement("cartes", "stimulus", entree_id=it.entree_id, sens_id=it.sens_id,
                                                     trace=None, data={"exercice": it.exercice, "nouveau": it.nouveau}))
