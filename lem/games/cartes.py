@@ -81,13 +81,13 @@ class Resultat:
 class PartieCartes:
     def __init__(self, con: sqlite3.Connection, params: dict, carte: CarteConnaissance | None = None,
                  embedder=None, magasin_sens=None, magasin_entrees=None, session_id: int | None = None,
-                 rng: random.Random | None = None):
+                 rng: random.Random | None = None, lexique=None):
         self.con, self.params = con, params
         self.carte = carte or CarteConnaissance(con)
         self.embedder, self.magasin_sens, self.magasin_entrees = embedder, magasin_sens, magasin_entrees
         self.session_id = session_id
         self.rng = rng or random.Random()
-        self.index = IndexFormel(con)
+        self.index = IndexFormel(con, lexique=lexique)
         self.file: list[Item] = []
         self.construire_file()
 

@@ -24,13 +24,16 @@ import marisa_trie
 import numpy as np
 
 SEP = "\x00"
+VERSION = 2          # à incrémenter quand le contenu de l'index change : les anciens caches sont refaits
 
 
 def _signature(con: sqlite3.Connection) -> str:
     f = con.execute("SELECT COUNT(*), TOTAL(rowid), MAX(rowid) FROM forme").fetchone()
-    e = con.execute("SELECT COUNT(*), TOTAL(id), MAX(id), (SELECT COUNT(*) FROM entree WHERE type = 'nom_propre') "
-                    "FROM entree").fetchone()
-    return hashlib.blake2b(repr((tuple(f), tuple(e))).encode(), digest_size=6).hexdigest()
+    e = con.execute("SELECT COUNT(*), TOTAL(id), MAX(id), (SELECT COUNT(*) FROM entree WHERE type = 'nom_propre'), "
+                    "TOTAL(zipf), COUNT(origine) FROM entree").fetchone()
+    d = con.execute("SELECT (SELECT COUNT(*) FROM sens_domaine), (SELECT COUNT(*) FROM entree_morpheme), "
+                    "(SELECT COUNT(*) FROM sens)").fetchone()
+    return hashlib.blake2b(repr((VERSION, tuple(f), tuple(e), tuple(d))).encode(), digest_size=6).hexdigest()
 
 
 class Lexique:
@@ -51,8 +54,26 @@ class Lexique:
 
     # -- construction ------------------------------------------------------------------------------
     def _construire(self, con: sqlite3.Connection, racine: Path | None) -> None:
-        eids = np.array([r[0] for r in con.execute("SELECT id FROM entree ORDER BY id")], dtype=np.int64)
-        types = [r[0] for r in con.execute("SELECT type FROM entree ORDER BY id")]
+        from lem.memory.knowledge import SQL_DOMAINES, SQL_MORPHS, bande_zipf
+        from lem.texte import normaliser
+
+        lignes_e = con.execute("SELECT id, type, forme, zipf, origine FROM entree ORDER BY id").fetchall()
+        eids = np.array([r[0] for r in lignes_e], dtype=np.int64)
+        types = [r[1] for r in lignes_e]
+        # Dimensions de la carte de connaissance (cf. knowledge._dimensions), par position d'entrée.
+        zipf = np.array([int(bande_zipf(r[3])[5:]) for r in lignes_e], dtype=np.int8)
+        noms_origines = sorted({r[4] for r in lignes_e if r[4]})
+        io = {o: i for i, o in enumerate(noms_origines)}
+        origine = np.array([io[r[4]] if r[4] else -1 for r in lignes_e], dtype=np.int16)
+        noms_dims: dict[str, int] = {}
+        d_lig, d_dim = [], []
+        for sql, prefixe in ((SQL_DOMAINES, "domaine:"), (SQL_MORPHS, "morph:")):
+            for eid, nom in con.execute(sql):
+                d_lig.append(eid)
+                d_dim.append(noms_dims.setdefault(prefixe + nom, len(noms_dims)))
+        d_lig = np.searchsorted(eids, np.array(d_lig, dtype=np.int64)).astype(np.int32)
+        d_dim = np.array(d_dim, dtype=np.int32)
+        lemmes = [normaliser(r[2]) for r in lignes_e]
         noms_types = sorted(set(types))
         code_type = np.array([noms_types.index(t) for t in types], dtype=np.int8)
         rows = con.execute("SELECT forme, norme, entree_id FROM forme ORDER BY entree_id, rowid").fetchall()
@@ -81,6 +102,9 @@ class Lexique:
         n_fid = fid[o2]
         self.n_ptr, self.n_fid = n_ptr, n_fid
         self.textes = textes
+        self.zipf, self.origine, self.noms_origines = zipf, origine, noms_origines
+        self.d_lig, self.d_dim, self.noms_dims = d_lig, d_dim, list(noms_dims)
+        self.lemmes = lemmes
         if racine is None:
             return
         tmp = racine.with_name(racine.name + ".tmp")
@@ -89,8 +113,12 @@ class Lexique:
         formes.save(str(tmp / "formes.marisa"))
         normes.save(str(tmp / "normes.marisa"))
         np.savez(tmp / "tableaux.npz", eids=eids, code_type=code_type, e_ptr=e_ptr, e_fid=fid, e_nid=nid,
-                 f_ptr=f_ptr, f_ent=self.f_ent, n_ptr=n_ptr, n_fid=n_fid)
+                 f_ptr=f_ptr, f_ent=self.f_ent, n_ptr=n_ptr, n_fid=n_fid, zipf=zipf, origine=origine,
+                 d_lig=d_lig, d_dim=d_dim)
         (tmp / "types.txt").write_text("\n".join(noms_types), encoding="utf-8")
+        (tmp / "origines.txt").write_text("\n".join(noms_origines), encoding="utf-8")
+        (tmp / "dimensions.txt").write_text("\n".join(self.noms_dims), encoding="utf-8")
+        (tmp / "lemmes.txt").write_text("\x01".join(lemmes), encoding="utf-8")
         (tmp / "textes.txt").write_text(bloc, encoding="utf-8")
         (tmp / "complet").write_text("")
         shutil.rmtree(racine, ignore_errors=True)
@@ -104,6 +132,11 @@ class Lexique:
                                                                          t["e_fid"], t["e_nid"])
         self.f_ptr, self.f_ent, self.n_ptr, self.n_fid = t["f_ptr"], t["f_ent"], t["n_ptr"], t["n_fid"]
         self.noms_types = (racine / "types.txt").read_text(encoding="utf-8").split("\n")
+        self.zipf, self.origine, self.d_lig, self.d_dim = t["zipf"], t["origine"], t["d_lig"], t["d_dim"]
+        lire = lambda nom, sep: (racine / nom).read_text(encoding="utf-8").split(sep)  # noqa: E731
+        self.noms_origines = [x for x in lire("origines.txt", "\n") if x]
+        self.noms_dims = [x for x in lire("dimensions.txt", "\n") if x]
+        self.lemmes = lire("lemmes.txt", "\x01")
         self.textes = (racine / "textes.txt").read_text(encoding="utf-8").split("\x01")
 
     # -- lecture -----------------------------------------------------------------------------------

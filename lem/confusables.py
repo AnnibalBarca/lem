@@ -12,6 +12,7 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 
+import numpy as np
 from rapidfuzz import process
 from rapidfuzz.distance import Levenshtein
 
@@ -30,17 +31,27 @@ class Confusable:
 class IndexFormel:
     """Lemmes normalisés, pour la recherche floue (≈ 30 ms sur 160 k lemmes)."""
 
-    def __init__(self, con: sqlite3.Connection, entree_ids: set[int] | None = None):
-        rows = con.execute("SELECT id, forme FROM entree").fetchall()
-        rows = [r for r in rows if entree_ids is None or r["id"] in entree_ids]
-        self.ids = [r["id"] for r in rows]
-        self.formes = [normaliser(r["forme"]) for r in rows]
+    def __init__(self, con: sqlite3.Connection, entree_ids: set[int] | None = None, lexique=None):
+        if lexique is not None:                     # lemmes déjà normalisés dans l'index du lexique
+            paires = [(int(e), f) for e, f in zip(lexique.eids, lexique.lemmes)
+                      if entree_ids is None or int(e) in entree_ids]
+        else:
+            paires = [(r["id"], normaliser(r["forme"])) for r in con.execute("SELECT id, forme FROM entree")
+                      if entree_ids is None or r["id"] in entree_ids]
+        self.ids = [e for e, _ in paires]
+        self.formes = [f for _, f in paires]
         self._fins: dict[int, dict[str, list[int]]] = {}
 
     def proches(self, forme: str, k: int = 20, seuil: float = 0.45) -> list[tuple[int, float]]:
-        res = process.extract(normaliser(forme), self.formes, scorer=Levenshtein.normalized_similarity,
-                              limit=k, score_cutoff=seuil)
-        return [(self.ids[i], s) for _, s, i in res]
+        # Tous les cœurs (cdist, workers=-1) : 551 k lemmes en quelques ms au lieu de ≈ 40 ms.
+        sc = process.cdist([normaliser(forme)], self.formes, scorer=Levenshtein.normalized_similarity,
+                           score_cutoff=seuil, workers=-1, dtype=np.float32)[0]
+        n = min(k, int((sc > 0).sum()))
+        if n == 0:
+            return []
+        top = np.argpartition(-sc, n - 1)[:n]
+        top = top[np.lexsort((top, -sc[top]))]          # score décroissant, puis ordre de l'index (comme extract)
+        return [(self.ids[i], float(sc[i])) for i in top]
 
     def meme_terminaison(self, forme: str, n: int = 4, k: int = 30) -> list[int]:
         f = normaliser(forme)

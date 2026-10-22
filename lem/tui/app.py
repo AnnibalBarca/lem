@@ -417,7 +417,7 @@ class EcranCartes(EcranPartie):
         from lem.games.cartes import PartieCartes
 
         return PartieCartes(self.ctx.con, self.params, self.ctx.carte, self.ctx.embedder,
-                            self.ctx.magasin_sens, self.ctx.magasin_entrees, self.session_id)
+                            self.ctx.magasin_sens, self.ctx.magasin_entrees, self.session_id, lexique=self.ctx.lexique)
 
     def demarrer(self) -> None:
         self.item = None
@@ -818,7 +818,8 @@ class EcranDecision(EcranPartie):
     def construire(self):
         from lem.games.decision import PartieDecision
 
-        return PartieDecision(self.ctx.con, self.jeu.id, self.params, self.ctx.carte, self.session_id)
+        return PartieDecision(self.ctx.con, self.jeu.id, self.params, self.ctx.carte, self.session_id,
+                              lexique=self.ctx.lexique)
 
     def demarrer(self) -> None:
         self.verif = False

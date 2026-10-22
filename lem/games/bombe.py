@@ -180,7 +180,7 @@ class PartieBombe:
         self._etudies = [r[0] for r in self.con.execute(
             """SELECT entree_id FROM trace_etat WHERE trace IN ('recep', 'prod')
                GROUP BY entree_id ORDER BY MIN(due)""") if r[0] in cibles]
-        self.index = IndexFormel(self.con, set(self.vivier)) if self.params["mode"] == "confusables" else None
+        self.index = IndexFormel(self.con, set(self.vivier), self.lex) if self.params["mode"] == "confusables" else None
 
     def solutions(self, suite: str) -> tuple[int, float]:
         """(nombre de mots du vivier contenant la suite, K = Σ P(connu))."""

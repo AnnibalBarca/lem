@@ -115,8 +115,9 @@ def _dimensions(zipf, origine, type_, domaines, morphs) -> list[str]:
 class CarteConnaissance:
     """Vue en mémoire de la carte, mise à jour en direct pendant une session."""
 
-    def __init__(self, con: sqlite3.Connection):
+    def __init__(self, con: sqlite3.Connection, lexique=None):
         self.con = con
+        self.lexique = lexique          # lem.lexique.Lexique : dimensions déjà en tableaux (chargement rapide)
         self.theta: dict[str, float] = {}
         self.n_theta: dict[str, int] = defaultdict(int)
         for r in con.execute("SELECT dimension, valeur, n_obs FROM theta"):
@@ -197,6 +198,8 @@ class CarteConnaissance:
         return np.array([pos.get(int(i), -1) for i in ids], dtype=np.int64)
 
     def _charger_vec(self) -> dict:
+        if self.lexique is not None:
+            return self._charger_vec_lexique()
         ids = np.fromiter(self._prior, dtype=np.int64, count=len(self._prior))
         n = len(ids)
         pos = {int(i): k for k, i in enumerate(ids)}
@@ -226,6 +229,30 @@ class CarteConnaissance:
         return {"ids": ids, "pos": pos, "connue": connue, "zipf": zipf, "types": list(noms_t), "type": types,
                 "origines": list(noms_o), "origine": origines, "noms": list(noms),
                 "lignes": np.array(lignes, dtype=np.int64), "dims": np.array(dims, dtype=np.int64),
+                "logit_prior": np.log(prior / (1 - prior)), "version": -1, "p": None,
+                "residu": np.fromiter((self._residu.get(int(i), 0.0) for i in ids), dtype=np.float64, count=n)}
+
+    def _charger_vec_lexique(self) -> dict:
+        """Même structure que _charger_vec, tirée de l'index du lexique (≈ 0,2 s au lieu de 3 s)."""
+        lex = self.lexique
+        ids = np.fromiter(self._prior, dtype=np.int64, count=len(self._prior))
+        n = len(ids)
+        pos = {int(i): k for k, i in enumerate(ids)}
+        pl = np.searchsorted(lex.eids, ids)
+        pl_ok = np.minimum(pl, len(lex.eids) - 1)
+        connue = (pl < len(lex.eids)) & (lex.eids[pl_ok] == ids)
+        zipf = np.where(connue, lex.zipf[pl_ok], -1).astype(np.int64)
+        types = np.where(connue, lex.code_type[pl_ok], -1).astype(np.int64)
+        origines = np.where(connue, lex.origine[pl_ok], -1).astype(np.int64)
+        inv = np.full(len(lex.eids), -1, dtype=np.int64)       # position dans l'index → position dans la carte
+        inv[pl[connue]] = np.nonzero(connue)[0]
+        lig = inv[lex.d_lig]
+        garde = lig >= 0
+        prior = np.clip(np.array([self._prior[int(i)] for i in ids], dtype=np.float64), 1e-6, 1 - 1e-6)
+        return {"ids": ids, "pos": pos, "connue": connue, "zipf": zipf,
+                "types": [f"type:{t}" for t in lex.noms_types], "type": types,
+                "origines": [f"origine:{o}" for o in lex.noms_origines], "origine": origines,
+                "noms": lex.noms_dims, "lignes": lig[garde], "dims": lex.d_dim[garde].astype(np.int64),
                 "logit_prior": np.log(prior / (1 - prior)), "version": -1, "p": None,
                 "residu": np.fromiter((self._residu.get(int(i), 0.0) for i in ids), dtype=np.float64, count=n)}
 

@@ -12,10 +12,12 @@ from collections import defaultdict
 
 
 class GenerateurPseudoMots:
-    def __init__(self, mots: list[str], ordre: int = 3, rng: random.Random | None = None):
+    def __init__(self, mots: list[str], ordre: int = 3, rng: random.Random | None = None, reels=None):
+        """`reels` : tout conteneur des graphies réelles (normes) à ne jamais proposer — un ensemble, ou
+        l'automate des normes du lexique (lem.lexique), bien plus léger que 2 M chaînes en mémoire."""
         self.ordre = ordre
         self.rng = rng or random.Random()
-        self.reels = set(mots)
+        self.reels = reels if reels is not None else set(mots)
         self.trans: dict[str, list[str]] = defaultdict(list)
         for m in mots:
             if not m.isalpha() or len(m) < 5:

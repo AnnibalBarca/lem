@@ -46,7 +46,7 @@ class Contexte:
 
     @cached_property
     def carte(self) -> CarteConnaissance:
-        return CarteConnaissance(self.con)
+        return CarteConnaissance(self.con, self.lexique)
 
     def params(self, jeu) -> dict:
         return {**jeu.defauts(), **get_reglage(self.con, f"params:{jeu.id}", {})}

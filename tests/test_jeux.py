@@ -1,3 +1,4 @@
+import numpy as np
 import pytest
 
 from lem.games import REGISTRE
@@ -256,3 +257,19 @@ def test_cartes_sans_noms_propres(con, carte, rng):
     assert all(it.entree_id != pp for it in partie.file)                       # ni en reprise de graphie
     partie2 = PartieCartes(con, params("cartes", nouveaux=200, confusables=False, noms_propres=True), carte, rng=rng)
     assert any(it.entree_id == pp for it in partie2.file)
+
+
+def test_carte_depuis_lexique_identique(con, rng):
+    from lem.lexique import Lexique
+    from lem.memory.knowledge import CarteConnaissance
+
+    a, b = CarteConnaissance(con), CarteConnaissance(con, Lexique(con))
+    for eid in rng.sample(list(a._prior), 15):
+        y = rng.random()
+        a.observer(eid, y, persister=False)
+        b.observer(eid, y, persister=False)
+    pa, pb = a.p_tous(), b.p_tous()
+    assert list(a.ids) == list(b.ids)
+    assert np.allclose(pa, pb, atol=1e-12)
+    for k, eid in enumerate(b.ids):
+        assert pb[k] == pytest.approx(b.p(int(eid)), abs=1e-12)

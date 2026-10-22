@@ -19,7 +19,6 @@ from lem.games.pool import selectionner
 from lem.journal import Evenement, ecrire
 from lem.memory.knowledge import CarteConnaissance
 from lem.pseudomots import GenerateurPseudoMots
-from lem.texte import normaliser
 
 ETALONNAGE = enregistrer(Jeu(
     id="etalonnage",
@@ -56,15 +55,17 @@ class Question:
 
 class PartieDecision:
     def __init__(self, con: sqlite3.Connection, jeu: str, params: dict, carte: CarteConnaissance | None = None,
-                 session_id: int | None = None, rng: random.Random | None = None):
+                 session_id: int | None = None, rng: random.Random | None = None, lexique=None):
         self.con, self.jeu, self.params, self.session_id = con, jeu, params, session_id
         self.carte = carte or CarteConnaissance(con)
         self.rng = rng or random.Random()
         self.vivier = [r for r in selectionner(con, filtres_depuis(params)) if r["type"] != "nom_propre"]
-        lemmes = [normaliser(r[0]) for r in con.execute("SELECT forme FROM entree")]
-        self.reels = {r[0] for r in con.execute("SELECT norme FROM forme")}   # norme = normaliser(forme)
-        self.gen = GenerateurPseudoMots(lemmes, rng=self.rng)
-        self.gen.reels |= self.reels
+        if lexique is None:
+            from lem.lexique import Lexique
+            lexique = Lexique(con)
+        # Les normes du lexique (automate) : un pseudo-mot ne doit être aucune forme réelle, lemme ou fléchie.
+        self.reels = lexique.normes
+        self.gen = GenerateurPseudoMots(lexique.lemmes, rng=self.rng, reels=self.reels)
         self.poses: set[int] = set()
         self.n = 0
         self.fausses_alertes = 0
