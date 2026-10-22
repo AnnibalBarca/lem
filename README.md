@@ -62,12 +62,18 @@ Les données vont dans `~/.lem/` (sources dans `~/.lem/sources`), **jamais dans 
 lem telecharger lexique wiktionnaire --ingerer
 lem telecharger jeuxdemots && lem ingest jeuxdemots ~/.lem/sources/jeuxdemots.txt   # optionnel
 
-# 2. Vecteurs sémantiques (une fois, ~1 h sur un M4), puis seuils mesurés sur la base réelle
-ollama pull bge-m3 && lem index && lem calibrer
+# 2. Vecteurs sémantiques, puis seuils mesurés sur la base réelle
+#    (1,26 M textes ; --zipf-min 0 --rang-max 3 se limite aux entrées attestées et aux 3 premiers sens :
+#     529 k textes, 1 h 44 avec Ollama sous Windows. Un `lem index` ultérieur complète ce qui manque.)
+ollama pull bge-m3 && lem index --zipf-min 0 --rang-max 3 && lem calibrer
 
 # 3. Jouer
 lem
 ```
+
+Sur une machine modeste, `LEM_VECTEURS=float16` divise par deux la RAM des vecteurs (≈ 1,1 Go au lieu de 2,2).
+Résultats et chiffres de la première intégration réelle : [docs/rapport-integration-wsl.md](docs/rapport-integration-wsl.md) ;
+téléphone et synchronisation entre machines : [docs/passation-mobile-sync.md](docs/passation-mobile-sync.md).
 
 Pour faire tout ça par un Claude Code local : [docs/claude-local.md](docs/claude-local.md) (macOS) ou
 [docs/claude-local-wsl.md](docs/claude-local-wsl.md) (Windows + WSL2). Sous WSL2, si Ollama tourne côté

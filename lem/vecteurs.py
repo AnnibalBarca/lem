@@ -170,17 +170,19 @@ class Magasin:
         self.pos = {int(i): k for k, i in enumerate(self.ids)}
         # Stockés en float16, gardés en float32 en mémoire : un seul produit matriciel par requête
         # (300 k sens : ~470 ms par blocs float16 → quelques dizaines de ms ; ≈ 1,2 Go de RAM).
+        # LEM_VECTEURS=float16 garde la moitié de la RAM (machine modeste, téléphone), au prix de la vitesse.
+        dtype = np.float16 if os.environ.get("LEM_VECTEURS", "").lower() == "float16" else np.float32
         if rows:
-            self.m = np.frombuffer(b"".join(r[1] for r in rows), dtype=np.float16).reshape(len(rows), -1).astype(np.float32)
+            self.m = np.frombuffer(b"".join(r[1] for r in rows), dtype=np.float16).reshape(len(rows), -1).astype(dtype)
         else:
-            self.m = np.zeros((0, 1), dtype=np.float32)
+            self.m = np.zeros((0, 1), dtype=dtype)
 
     def __len__(self) -> int:
         return len(self.ids)
 
     def vecteur(self, oid: int) -> np.ndarray | None:
         k = self.pos.get(oid)
-        return None if k is None else self.m[k]
+        return None if k is None else self.m[k].astype(np.float32)
 
     def sim(self, a: int, b: int) -> float | None:
         va, vb = self.vecteur(a), self.vecteur(b)
@@ -192,14 +194,14 @@ class Magasin:
         ks = [self.pos[i] for i in ids if i in self.pos]
         if not ks:
             return {}
-        s = self.m[ks] @ v.astype(np.float32)
+        s = self.m[ks].astype(np.float32) @ v.astype(np.float32)
         return {int(self.ids[k]): float(x) for k, x in zip(ks, s)}
 
     def voisins(self, v: np.ndarray, k: int = 10, exclure: set[int] | None = None,
                 parmi: np.ndarray | None = None) -> list[Voisin]:
         if len(self) == 0:
             return []
-        scores = self.m @ v.astype(np.float32)
+        scores = (self.m @ v.astype(self.m.dtype)).astype(np.float32)
         if parmi is not None:
             masque = np.full(len(self), -np.inf, dtype=np.float32)
             idx = [self.pos[int(i)] for i in parmi if int(i) in self.pos]
