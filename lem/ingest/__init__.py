@@ -372,6 +372,59 @@ def wiktionnaire(con: sqlite3.Connection, path: str | Path, progression: Progres
     return n
 
 
+# -- Grammalecte (formes manquantes) ----------------------------------------------------------------
+
+# Catégories de Grammalecte (premier champ de l'étiquette) → catégorie de lem. Les autres (éléments de
+# locution « extenso », mots grammaticaux élidés « lorsqu », préfixes « arabo », noms propres) sont ignorées.
+POS_GRAMMALECTE = {"N": "nom", "A": "adj", "V": "verbe", "W": "adv", "J": "interj", "B": "num"}
+RE_FORME_SIMPLE = re.compile(r"^[a-zàâäéèêëîïôöùûüÿçœæ]+(?:[-'’][a-zàâäéèêëîïôöùûüÿçœæ]+)*$")
+
+
+def grammalecte(con: sqlite3.Connection, path: str | Path, progression: Progression = None) -> int:
+    """Ajoute les formes du dictionnaire de Grammalecte (toutes variantes) absentes du lexique : conjugaisons,
+    pluriels, graphies rectifiées. Rattachées au lemme s'il existe, sinon à une nouvelle entrée SANS
+    définition (valide dans la Bombe, absente des Cartes). Le code de lecture (graphspell) est celui du paquet
+    téléchargé, chargé à la volée : il n'est jamais copié dans le dépôt. Renvoie le nombre de formes ajoutées."""
+    import sys
+    import tempfile
+    import zipfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        zipfile.ZipFile(path).extractall(tmp)
+        racine = next(Path(tmp).rglob("graphspell")).parent.parent
+        sys.path.insert(0, str(racine))
+        try:
+            from grammalecte.graphspell.ibdawg import IBDAWG
+            dico = IBDAWG("fr-allvars.json")
+            entrees = list(dico.select())
+        finally:
+            sys.path.remove(str(racine))
+            for m in [m for m in sys.modules if m == "grammalecte" or m.startswith("grammalecte.")]:
+                del sys.modules[m]
+    connues = {r[0] for r in con.execute("SELECT DISTINCT forme FROM forme")}
+    n = 0
+    for i, (flex, lemme, tag) in enumerate(entrees):
+        f = flex.lower()
+        cat = tag[1:2] if tag.startswith(":") else ""
+        pos = POS_GRAMMALECTE.get(cat)
+        if (f in connues or pos is None or flex[:1].isupper() or ":1ś" in tag or not RE_FORME_SIMPLE.match(f)
+                or (pos == "adv" and len(f) < 4)):
+            continue
+        cible = con.execute("SELECT id FROM entree WHERE forme = ? AND langue = 'fr' AND pos = ?", (lemme, pos)).fetchone() \
+            or con.execute("SELECT id FROM entree WHERE forme = ? AND langue = 'fr' AND type NOT IN ('nom_propre', 'sigle')",
+                           (lemme,)).fetchone()
+        eid = cible[0] if cible else upsert_entree(
+            con, lemme, pos, type="compose" if re.search(r"[ \-]", lemme) else "mot")
+        ajouter_formes(con, eid, [f])
+        connues.add(f)
+        n += 1
+        if progression and n % 2000 == 0:
+            con.commit()
+            progression(n)
+    con.commit()
+    return n
+
+
 # -- JeuxDeMots ------------------------------------------------------------------------------------
 
 # Types de relations JDM retenus (identifiants à vérifier sur le dump réel).

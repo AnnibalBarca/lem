@@ -289,3 +289,17 @@ def test_bombe_anciens_modes_et_temps_min(con, carte, rng):
     ctx = Contexte.__new__(Contexte)
     ctx.con = con
     assert ctx.params(BOMBE)["mode"] == "standard"
+
+
+def test_bombe_formes_soudees_1990(con, carte, rng):
+    from lem.db import ajouter_formes, upsert_entree
+
+    eid_ = upsert_entree(con, "néo-babylonien", "adj", type="compose")
+    ajouter_formes(con, eid_, ["néo-babyloniennes"])
+    con.commit()
+    b = PartieBombe(con, params("bombe", mode="standard", solutions_min=1), carte, rng=rng)
+    b.invite.suite = "ba"
+    r = b.repondre("neobabyloniennes", 900)
+    assert r.valide and r.forme == "néobabyloniennes" and r.entree_id == eid_
+    b.invite.suite = "ba"
+    assert not b.repondre("neobabylonienes", 900).valide         # soudure oui, faute non

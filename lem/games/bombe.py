@@ -75,6 +75,14 @@ BOMBE = enregistrer(Jeu(
 
 
 TYPES_HORS_JEU = ("nom_propre", "sigle")
+# Rectifications orthographiques de 1990 : les composés d'éléments savants se soudent (« néobabylonien »
+# pour « néo-babylonien », « autoécole » pour « auto-école »). La forme soudée est donc correcte.
+PREFIXES_SOUDES = tuple(sorted((
+    "aero", "afro", "agro", "anglo", "anti", "archi", "audio", "auto", "bio", "cardio", "contre", "cyber",
+    "eco", "electro", "entre", "euro", "extra", "franco", "geo", "greco", "hydro", "hyper", "hypo", "infra",
+    "inter", "intra", "judeo", "macro", "maxi", "mega", "micro", "mini", "multi", "neo", "para", "photo",
+    "poly", "post", "pre", "proto", "pseudo", "psycho", "radio", "retro", "semi", "socio", "supra", "tele",
+    "thermo", "turbo", "ultra", "video"), key=len, reverse=True))
 SEP = "\x00"
 
 
@@ -329,7 +337,24 @@ class PartieBombe:
             for f in self.lex.formes_de_norme(normaliser(cle)):
                 if accents_manquants(cle, f) and (ids_f := self.lex.entrees(f, exclus)):
                     return f, set(ids_f)
+        if not ids:
+            soudee = self._soudure(cle, exclus)
+            if soudee:
+                return soudee
         return cle, set(ids)
+
+    def _soudure(self, cle: str, exclus: tuple[str, ...]) -> tuple[str, set[int]] | None:
+        """« néobabylonien » : forme soudée (1990) d'un composé « néo-babylonien » du lexique."""
+        n = normaliser(cle)
+        for p in PREFIXES_SOUDES:
+            if not n.startswith(p) or len(n) < len(p) + 3:
+                continue
+            for f in self.lex.formes_de_norme(p + "-" + n[len(p):]):
+                soudee = f.replace("-", "", 1)
+                ok = soudee == cle or (self.accents_tolerants and accents_manquants(cle, soudee))
+                if ok and (ids := self.lex.entrees(f, exclus)):
+                    return soudee, set(ids)
+        return None
 
     def _diagnostic(self, texte: str) -> Diagnostic | None:
         """Faute de graphie ? Candidats : formes valides contenant la suite, de longueur voisine (±2) — une

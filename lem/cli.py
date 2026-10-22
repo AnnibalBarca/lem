@@ -70,6 +70,9 @@ def cmd_ingest(args) -> None:
         n = ingest.wiktionnaire(ctx.con, args.fichier, prog)
     elif args.source == "jeuxdemots":
         n = ingest.jeuxdemots(ctx.con, args.fichier, progression=prog)
+    elif args.source == "grammalecte":
+        n = ingest.grammalecte(ctx.con, args.fichier, prog)
+        print(f"\n→ `lem ingest wordfreq` puis `lem prior` pour donner une fréquence aux nouvelles entrées.")
     elif args.source == "wordfreq":
         n = ingest.zipf_wordfreq(ctx.con)
     else:
@@ -96,9 +99,10 @@ def cmd_telecharger(args) -> None:
     if args.ingerer and chemins:
         ctx = _ctx(args)
         ingest.charger_domaines(ctx.con)
-        for nom in ("lexique", "wiktionnaire", "jeuxdemots"):
+        for nom in ("lexique", "wiktionnaire", "grammalecte", "jeuxdemots"):
             if nom in chemins:
-                f = {"lexique": ingest.lexique, "wiktionnaire": ingest.wiktionnaire, "jeuxdemots": ingest.jeuxdemots}[nom]
+                f = {"lexique": ingest.lexique, "wiktionnaire": ingest.wiktionnaire, "grammalecte": ingest.grammalecte,
+                     "jeuxdemots": ingest.jeuxdemots}[nom]
                 print(f"ingestion {nom} : {f(ctx.con, chemins[nom])}")
         print(f"wordfreq : {ingest.zipf_wordfreq(ctx.con)}")
         args.cible, args.pente = 45_000, 1.6
@@ -181,11 +185,11 @@ def main(argv: list[str] | None = None) -> None:
     d.add_argument("--sans-jeu", action="store_true")
     d.set_defaults(f=cmd_demo)
     i = sp.add_parser("ingest")
-    i.add_argument("source", choices=["lexique", "wiktionnaire", "jeuxdemots", "wordfreq"])
+    i.add_argument("source", choices=["lexique", "wiktionnaire", "grammalecte", "jeuxdemots", "wordfreq"])
     i.add_argument("fichier", nargs="?")
     i.set_defaults(f=cmd_ingest)
     t = sp.add_parser("telecharger")
-    t.add_argument("sources", nargs="*", choices=["lexique", "wiktionnaire", "jeuxdemots"])
+    t.add_argument("sources", nargs="*", choices=["lexique", "wiktionnaire", "grammalecte", "jeuxdemots"])
     t.add_argument("--url", help="URL imposée (une seule source)")
     t.add_argument("--ingerer", action="store_true", help="enchaîne ingestion, wordfreq et prior")
     t.set_defaults(f=cmd_telecharger)

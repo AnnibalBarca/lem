@@ -44,6 +44,13 @@ SOURCES = {
         "≈ 1–2 Go compressé (toutes langues ; l'ingestion garde le français) · CC BY-SA. "
         "Attention : kaikki.org/dictionary/French est le Wiktionnaire ANGLAIS (gloses en anglais) — pas celui-là.",
     ),
+    "grammalecte": Source(
+        "Grammalecte (dictionnaire orthographique, toutes variantes)",
+        ["https://grammalecte.net/zip/Grammalecte-fr-v2.3.0.zip"],
+        "grammalecte.zip",
+        "≈ 6 Mo · dictionnaire sous MPL 2.0 (Dicollecte), code GPL v3 — lu localement, jamais copié dans le dépôt. "
+        "Ajoute ≈ 19 000 formes (conjugaisons, pluriels, rectifications de 1990) que le Wiktionnaire n'a pas.",
+    ),
     "jeuxdemots": Source(
         "JeuxDeMots (réseau lexical)",
         [],
