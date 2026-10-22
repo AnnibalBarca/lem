@@ -125,10 +125,18 @@ class PartieBombe:
         Graphie exacte exigée : accents compris. Aucune variante n'est acceptée."""
         # ≈ 2 M formes sur la vraie base : des tuples plutôt que des ensembles (5× moins de mémoire).
         self.valides: dict[str, tuple[int, ...]] = {}
-        get = self.valides.get
-        for forme, eid in self.con.execute("SELECT forme, entree_id FROM forme"):
+        # norme → forme(s) : candidats du diagnostic de graphie, cherchés en mémoire. Un balayage SQL des
+        # 2 M formes relit le disque sous WSL2 (le cache de pages est rendu à Windows) : 3 s par faute.
+        self._normes: dict[str, str | tuple[str, ...]] = {}
+        get, getn = self.valides.get, self._normes.get
+        for forme, norme, eid in self.con.execute("SELECT forme, norme, entree_id FROM forme"):
             ids = get(forme)
             self.valides[forme] = (eid,) if ids is None else ids + (eid,)
+            fs = getn(norme)
+            if fs is None:
+                self._normes[norme] = forme
+            elif fs != forme and (isinstance(fs, str) or forme not in fs):
+                self._normes[norme] = (fs, forme) if isinstance(fs, str) else fs + (forme,)
         self._candidats: dict[str, list[str]] = {}
 
     def reconfigurer(self) -> None:
@@ -282,9 +290,15 @@ class PartieBombe:
     def _diagnostic(self, texte: str) -> Diagnostic | None:
         suite = self.invite.suite
         if suite not in self._candidats:
-            # `norme` = normaliser(forme), calculée à l'ingestion : un balayage SQL plutôt que 2 M appels.
-            self._candidats[suite] = [r[0] for r in self.con.execute(
-                "SELECT DISTINCT forme FROM forme WHERE instr(norme, ?) > 0", (suite,))]
+            # `norme` = normaliser(forme), calculée à l'ingestion.
+            cands: list[str] = []
+            for norme, fs in self._normes.items():
+                if suite in norme:
+                    if isinstance(fs, str):
+                        cands.append(fs)
+                    else:
+                        cands.extend(fs)
+            self._candidats[suite] = cands
         return diagnostiquer(self.con, texte, self.invite.cible_id, self._candidats[suite])
 
     def repondre(self, texte: str, latence_ms: int, frappe: Frappe | None = None) -> Retour:

@@ -172,7 +172,7 @@ class CarteConnaissance:
                 ok = code >= 0
                 x[ok] += th(noms)[code[ok]]
             x += np.bincount(v["lignes"], weights=th(v["noms"])[v["dims"]], minlength=n)
-            x += np.fromiter((self._residu.get(int(i), 0.0) for i in v["ids"]), dtype=np.float64, count=n)
+            x += v["residu"]
             v["p"], v["version"] = sigmoid(x), self._version
         return v["p"]
 
@@ -226,7 +226,8 @@ class CarteConnaissance:
         return {"ids": ids, "pos": pos, "connue": connue, "zipf": zipf, "types": list(noms_t), "type": types,
                 "origines": list(noms_o), "origine": origines, "noms": list(noms),
                 "lignes": np.array(lignes, dtype=np.int64), "dims": np.array(dims, dtype=np.int64),
-                "logit_prior": np.log(prior / (1 - prior)), "version": -1, "p": None}
+                "logit_prior": np.log(prior / (1 - prior)), "version": -1, "p": None,
+                "residu": np.fromiter((self._residu.get(int(i), 0.0) for i in ids), dtype=np.float64, count=n)}
 
     def n_obs(self, entree_id: int) -> int:
         return self._nobs.get(entree_id, 0)
@@ -245,6 +246,8 @@ class CarteConnaissance:
         self._residu[entree_id] = self._residu.get(entree_id, 0.0) + LR_RESIDU / (1.0 + n / 3.0) * err
         self._nobs[entree_id] = n + 1
         self._version += 1
+        if self._vec is not None and (k := self._vec["pos"].get(entree_id)) is not None:
+            self._vec["residu"][k] = self._residu[entree_id]
         nouveau = self.p(entree_id)
         if persister:
             self._persister(entree_id, nouveau)
@@ -280,6 +283,8 @@ class CarteConnaissance:
         self._residu = {k: 0.0 for k in self._residu}
         self._nobs = {k: 0 for k in self._nobs}
         self._version += 1
+        if self._vec is not None:
+            self._vec["residu"][:] = 0.0
         self.con.execute("DELETE FROM theta")
         self.con.execute("UPDATE connaissance SET residu = 0, n_obs = 0, p_connu = p_prior")
         self.con.commit()
