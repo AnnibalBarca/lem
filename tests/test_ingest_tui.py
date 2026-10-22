@@ -140,3 +140,33 @@ def test_logo_mots_recents():
     assert m == {"L": "CRÉOLE", "E": "OISEAUMOQUEUR", "M": "LAURENTIE"}     # 8 cubes pour L, 13 pour E et M
     assert "É" in logo.rendre(mots=m).plain and "G" not in logo.rendre(mots=m).plain   # plus LANGUE
     assert logo.mots_pour_logo([]) == {}
+
+
+async def test_bombe_saisie_gardee_si_refusee(tmp_path):
+    from textual.widgets import Input
+
+    from lem.cli import main
+    from lem.contexte import Contexte
+    from lem.tui.app import EcranBombe, LemApp
+
+    chemin = tmp_path / "t.sqlite"
+    main(["--db", str(chemin), "demo", "--sans-jeu"])
+    app = LemApp(Contexte(chemin))
+    async with app.run_test(size=(110, 50)) as pilot:
+        await pilot.pause(1.6)
+        await pilot.press("down", "enter", "j")
+        e = app.screen
+        assert isinstance(e, EcranBombe)
+        while not e.pret:
+            await pilot.pause(0.05)
+        e.partie.invite.suite = "min"
+        await pilot.press(*"eminentt", "enter")                 # refusé : reste dans le champ
+        while e.occupe:
+            await pilot.pause(0.02)
+        assert e.query_one("#saisie", Input).value == "eminentt"
+        await pilot.press("backspace", "enter")                  # corrigé d'un effacement
+        await pilot.pause(0.05)
+        while e.occupe:
+            await pilot.pause(0.02)
+        assert e.query_one("#saisie", Input).value == ""
+        assert "1ʳᵉ fois" in str(e.query_one("#retour").render())

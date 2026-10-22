@@ -43,7 +43,7 @@ def _mot_valide(partie, suite, sauf):
 
 
 def test_bombe_cible_ratee_revient_plus_tard_une_fois(con, carte, rng):
-    p = params("bombe", mode="apprentissage", long_min=2, long_max=2, retours=1, ecart=3, revelation_max=10_000)
+    p = params("bombe", mode="conscient", long_min=2, long_max=2, retours=1, ecart=3, revelation_max=10_000)
     b = PartieBombe(con, p, carte, rng=rng)
     inv = b.invite
     assert inv.cible_id is not None and inv.suite in normaliser(inv.cible_forme)
@@ -57,20 +57,20 @@ def test_bombe_cible_ratee_revient_plus_tard_une_fois(con, carte, rng):
         vues.append((b.invite.cible_id, b.invite.suite))
         b.invite = b.nouvelle_invite()
     retours = [s for c, s in vues if c == cible]
-    assert len(retours) == 1 and len(retours[0]) > len(suite)                          # une fois, suite plus longue
+    assert len(retours) == 1 and len(retours[0]) <= 2                                  # une fois, jamais > long_max
     assert len({c for c, _ in vues}) == len(vues)                                      # sinon, jamais deux fois
 
 
 def test_bombe_revelation_seulement_a_portee(con, carte, rng):
-    b = PartieBombe(con, params("bombe", mode="apprentissage", long_min=2, long_max=2, revelation_max=0), carte, rng=rng)
+    b = PartieBombe(con, params("bombe", mode="conscient", long_min=2, long_max=2, revelation_max=0), carte, rng=rng)
     assert b.exploser().revelation is None
 
 
 def test_bombe_sans_noms_propres(con, carte, rng):
-    b = PartieBombe(con, params("bombe", mode="libre", solutions_min=1), carte, rng=rng)
+    b = PartieBombe(con, params("bombe", mode="standard", solutions_min=1), carte, rng=rng)
     assert "pouligny-saint-pierre" not in b.valides
     assert all(r["type"] not in ("nom_propre", "sigle") for r in b.vivier.values())
-    b2 = PartieBombe(con, params("bombe", mode="libre", solutions_min=1, noms_propres=True), carte, rng=rng)
+    b2 = PartieBombe(con, params("bombe", mode="standard", solutions_min=1, noms_propres=True), carte, rng=rng)
     assert "pouligny-saint-pierre" in b2.valides
 
 
@@ -81,12 +81,12 @@ def test_bombe_revise_les_mots_des_cartes(con, carte, rng):
     eid_ = con.execute("SELECT id FROM entree WHERE forme = 'thuriféraire'").fetchone()[0]
     ecrire(con, None, Evenement("cartes", "reponse", entree_id=eid_, trace="recep", note_auto=3, correct=True))
     scheduler.reconstruire(con)
-    b = PartieBombe(con, params("bombe", mode="apprentissage", revision=1.0, long_min=2, long_max=2), carte, rng=rng)
+    b = PartieBombe(con, params("bombe", mode="conscient", revision=1.0, long_min=2, long_max=2), carte, rng=rng)
     assert b.invite.cible_id == eid_
 
 
 def test_bombe_rejette_mot_invalide_ou_reutilise(con, carte, rng):
-    b = PartieBombe(con, params("bombe", mode="libre", solutions_min=1), carte, rng=rng)
+    b = PartieBombe(con, params("bombe", mode="standard", solutions_min=1), carte, rng=rng)
     assert not b.repondre("xyzqwv", 500).valide
     mot = _mot_valide(b, b.invite.suite, set())
     assert b.repondre(mot, 500).valide
@@ -98,7 +98,7 @@ def test_bombe_rejette_mot_invalide_ou_reutilise(con, carte, rng):
 
 
 def test_bombe_explosion_et_fin(con, carte, rng):
-    b = PartieBombe(con, params("bombe", mode="libre", vies=2, solutions_min=1), carte, rng=rng)
+    b = PartieBombe(con, params("bombe", mode="standard", vies=2, solutions_min=1), carte, rng=rng)
     b.exploser()
     b.exploser()
     assert b.finie
@@ -174,7 +174,7 @@ def test_calcul_vectoriel_identique(con, carte, rng):
     p = carte.p_tous()
     for eid, k in zip(carte.ids, range(len(p))):
         assert p[k] == pytest.approx(carte.p(int(eid)), abs=1e-12)
-    b = PartieBombe(con, params("bombe", mode="libre"), carte, rng=rng)
+    b = PartieBombe(con, params("bombe", mode="standard"), carte, rng=rng)
     for suite in ("on", "ym", "e", "zzz"):
         n, k = 0, 0.0
         for eid, fs in b.formes_vivier.items():
@@ -213,14 +213,14 @@ def test_carte_graphie_repondue(con, carte, rng):
 
 
 def test_bombe_suite_sans_trait_d_union(con, carte, rng):
-    b = PartieBombe(con, params("bombe", mode="apprentissage"), carte, rng=rng)
+    b = PartieBombe(con, params("bombe", mode="conscient"), carte, rng=rng)
     for forme in ("ville-champignon", "demi-petit-cousin", "pouligny-saint-pierre"):
         for L in range(2, len(forme)):
             assert b._suite_distinctive(forme, longueur=L).isalpha()
 
 
 def test_bombe_retour_cible_courte(con, carte, rng):
-    b = PartieBombe(con, params("bombe", mode="apprentissage", ecart=2), carte, rng=rng)
+    b = PartieBombe(con, params("bombe", mode="conscient", ecart=2), carte, rng=rng)
     cid = min((i for i, r in b.vivier.items() if r["forme"].isalpha()), key=lambda i: len(b.vivier[i]["forme"]))
     b.retours.append((b.n_invites, cid, 30, 0))         # longueur demandée > longueur du mot
     inv = b.nouvelle_invite()
@@ -237,12 +237,12 @@ def test_cartes_ignorent_les_sens_sans_definition(con, carte, rng):
 def test_bombe_accents_manquants(con, carte, rng):
     from lem.db import set_reglage
 
-    b = PartieBombe(con, params("bombe", mode="libre", solutions_min=1), carte, rng=rng)
+    b = PartieBombe(con, params("bombe", mode="standard", solutions_min=1), carte, rng=rng)
     b.invite.suite = "min"
     r = b.repondre("eminent", 800)
     assert r.valide and r.forme == "éminent"                     # reconnu, affiché avec ses accents
     set_reglage(con, "accents_tolerants", False)
-    b2 = PartieBombe(con, params("bombe", mode="libre", solutions_min=1), carte, rng=rng)
+    b2 = PartieBombe(con, params("bombe", mode="standard", solutions_min=1), carte, rng=rng)
     b2.invite.suite = "min"
     assert not b2.repondre("eminent", 800).valide
 
@@ -273,3 +273,19 @@ def test_carte_depuis_lexique_identique(con, rng):
     assert np.allclose(pa, pb, atol=1e-12)
     for k, eid in enumerate(b.ids):
         assert pb[k] == pytest.approx(b.p(int(eid)), abs=1e-12)
+
+
+def test_bombe_anciens_modes_et_temps_min(con, carte, rng):
+    from lem.contexte import Contexte
+    from lem.db import set_reglage
+    from lem.games.bombe import BOMBE
+
+    b = PartieBombe(con, params("bombe", mode="apprentissage"), carte, rng=rng)
+    assert b.params["mode"] == "conscient"
+    assert executer_commande(BOMBE, dict(BOMBE.defauts()), "/mode libre").ok      # ancien nom accepté
+    b.facteur_temps = 0.3                                                           # le jeu accélère…
+    assert all(b._duree() >= b.params["temps_min"] for _ in range(50))             # … jamais sous 10 s
+    set_reglage(con, "params:bombe", {"mode": "libre"})
+    ctx = Contexte.__new__(Contexte)
+    ctx.con = con
+    assert ctx.params(BOMBE)["mode"] == "standard"

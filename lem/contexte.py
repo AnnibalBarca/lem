@@ -49,7 +49,10 @@ class Contexte:
         return CarteConnaissance(self.con, self.lexique)
 
     def params(self, jeu) -> dict:
-        return {**jeu.defauts(), **get_reglage(self.con, f"params:{jeu.id}", {})}
+        p = {**jeu.defauts(), **get_reglage(self.con, f"params:{jeu.id}", {})}
+        for d in jeu.params:                       # valeurs renommées depuis l'enregistrement
+            p[d.nom] = d.migrer(p.get(d.nom))
+        return p
 
     def sauver_params(self, jeu, params: dict) -> None:
         set_reglage(self.con, f"params:{jeu.id}", params)

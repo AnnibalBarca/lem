@@ -24,6 +24,10 @@ class Param:
     max: float | None = None
     choix: tuple | None = None
     alias: tuple[str, ...] = ()
+    anciens: dict | None = None     # anciennes valeurs → nouvelles (réglages enregistrés avant un renommage)
+
+    def migrer(self, v: Any) -> Any:
+        return self.anciens.get(v, v) if self.anciens and isinstance(v, str) else v
 
     def convertir(self, brut: str) -> Any:
         brut = brut.strip()
@@ -41,6 +45,7 @@ class Param:
                 bornes = f"{self.min if self.min is not None else '−∞'} et {self.max if self.max is not None else '+∞'}"
                 raise ValueError(f"{self.nom} doit être entre {bornes}")
             return v
+        brut = self.migrer(brut)
         if self.choix and brut not in self.choix:
             raise ValueError(f"{self.nom} ∈ {{{', '.join(self.choix)}}}")
         return brut

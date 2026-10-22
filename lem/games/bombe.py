@@ -1,16 +1,18 @@
 """Bombe (façon JKLM / WordBomb), branchée sur ta mémoire.
 
 Modes
-  libre         : comme JKLM — une suite de lettres, n'importe quel mot français qui la contient.
-  apprentissage : la suite de lettres est tirée d'un mot CIBLE : pour moitié un mot étudié dans les
-                  Cartes (le plus tôt dû d'abord), sinon un mot flou ou utile. Tout mot valide fait
-                  passer la bombe.
+  standard      : comme JKLM — une suite de lettres courante, n'importe quel mot français qui la contient.
+                  Toujours branché sur la base : chaque mot trouvé est journalisé (temps, fautes) et nourrit
+                  la carte de connaissance ; le jeu affiche combien de fois tu l'as trouvé et ton temps habituel.
+  conscient     : le tuteur. La suite est tirée d'un mot CIBLE : pour moitié un mot étudié dans les Cartes
+                  (le plus tôt dû d'abord), sinon un mot flou ou utile. Tout mot valide fait passer la bombe.
+                  Jamais plus de `long_max` lettres (3) : la suite ne doit pas forcer la main vers sa cible.
   confusables   : la cible est choisie dans une grappe de confusables et la suite de lettres est
                   prise dans leur partie commune (-onym- → homonyme, paronyme, éponyme…).
 
 Une cible ne paraît qu'une fois par partie. Ratée, elle revient UNE fois, plus tard (`ecart` invites),
-avec une suite plus longue qui ne désigne plus qu'elle ou quelques mots : un rappel espacé, pas un
-allongement immédiat de la même suite. Elle n'est révélée que si elle était à portée (au plus
+avec sa suite la plus distinctive (au plus `long_max` lettres) : un rappel espacé, pas un allongement
+immédiat de la même suite. Elle n'est révélée que si elle était à portée (au plus
 `revelation_max` solutions) ; sinon la suite était une suite libre comme une autre.
 
 Comme JKLM, ni noms propres ni sigles (ni comme cibles ni comme réponses) ; une graphie qui est aussi un
@@ -42,14 +44,16 @@ from lem.texte import normaliser
 
 ALPHABET_BONUS = "abcdefghijlmnopqrstuv"
 
+ANCIENS_MODES = {"libre": "standard", "apprentissage": "conscient"}
+
 BOMBE = enregistrer(Jeu(
     id="bombe",
     nom="Bombe",
     accroche="Une suite de lettres. Un mot. Avant l'explosion.",
     description="JKLM branché sur ta mémoire : répétition intelligente, cibles floues, confusables.",
     params=[
-        Param("mode", "Mode", str, "apprentissage", "libre | apprentissage | confusables",
-              choix=("libre", "apprentissage", "confusables")),
+        Param("mode", "Mode", str, "standard", "standard | conscient | confusables",
+              choix=("standard", "conscient", "confusables"), anciens=ANCIENS_MODES),
         *PARAMS_FILTRES,
         Param("long_min", "Lettres min", int, 2, "longueur minimale de la suite", 2, 10),
         Param("long_max", "Lettres max", int, 3, "longueur maximale de la suite", 2, 12),
@@ -58,8 +62,8 @@ BOMBE = enregistrer(Jeu(
         Param("vies_max", "Vies max", int, 3, "", 1, 20),
         Param("regain", "Regain de vie", str, "alphabet", "aucun | alphabet | mot_rare",
               choix=("aucun", "alphabet", "mot_rare")),
-        Param("temps_min", "Bombe min (s)", float, 6.0, "", 1, 120),
-        Param("temps_max", "Bombe max (s)", float, 14.0, "", 1, 300),
+        Param("temps_min", "Bombe min (s)", float, 10.0, "jamais moins, même quand le jeu accélère", 1, 120),
+        Param("temps_max", "Bombe max (s)", float, 15.0, "", 1, 300),
         Param("retours", "Retours d'une cible ratée", int, 1, "une cible ratée revient plus tard, une fois", 0, 3),
         Param("ecart", "Écart avant retour", int, 8, "nombre d'invites avant le retour d'une cible ratée", 2, 100),
         Param("revelation_max", "Révélation si ≤ solutions", int, 30, "la cible n'est révélée que si elle était à portée", 1, 10_000),
@@ -72,6 +76,17 @@ BOMBE = enregistrer(Jeu(
 
 TYPES_HORS_JEU = ("nom_propre", "sigle")
 SEP = "\x00"
+
+
+def trouvailles(con: sqlite3.Connection, entree_id: int) -> dict:
+    """Score de trouvaille d'un mot, tiré du journal : combien de fois tu l'as trouvé à la Bombe, ton temps
+    médian pour le trouver (de l'apparition de la suite à la validation), tes fautes de graphie dessus."""
+    lat = [r[0] for r in con.execute(
+        """SELECT latence_ms FROM evenement WHERE entree_id = ? AND jeu = 'bombe' AND type = 'reponse'
+           AND correct = 1 AND latence_ms IS NOT NULL""", (entree_id,))]
+    fautes = con.execute("""SELECT COUNT(*) FROM evenement WHERE entree_id = ? AND jeu = 'bombe' AND type = 'reponse'
+                            AND trace = 'ortho'""", (entree_id,)).fetchone()[0]
+    return {"n": len(lat), "latence_mediane_ms": statistics.median(lat) if lat else None, "fautes": fautes}
 
 
 class _Valides:
@@ -112,12 +127,14 @@ class Retour:
     points: float = 0.0
     graphie: Diagnostic | None = None           # faute de graphie identifiée
     forme: str | None = None                    # la forme reconnue (accentuée si la saisie ne l'était pas)
+    trouvaille: dict | None = None              # ce que la Bombe sait de toi sur ce mot (cf. trouvailles)
 
 
 class PartieBombe:
     def __init__(self, con: sqlite3.Connection, params: dict, carte: CarteConnaissance | None = None,
                  magasin_entrees=None, session_id: int | None = None, rng: random.Random | None = None,
                  lexique=None):
+        params["mode"] = ANCIENS_MODES.get(params.get("mode"), params.get("mode"))
         self.con, self.params = con, params
         self.lex = lexique
         self.carte = carte or CarteConnaissance(con)
@@ -207,7 +224,7 @@ class PartieBombe:
     # -- choix de l'invite ----------------------------------------------------
     def _duree(self) -> float:
         tmin, tmax = self.params["temps_min"], max(self.params["temps_min"], self.params["temps_max"])
-        return max(1.0, self.rng.uniform(tmin, tmax) * self.facteur_temps)
+        return max(tmin, self.rng.uniform(tmin, tmax) * self.facteur_temps)
 
     def _longueur(self) -> int:
         lo, hi = self.params["long_min"], max(self.params["long_min"], self.params["long_max"])
@@ -264,7 +281,7 @@ class PartieBombe:
     def nouvelle_invite(self) -> Invite:
         mode = self.params["mode"]
         self.n_invites += 1
-        if mode == "libre":
+        if mode == "standard":
             return self._invite_libre()
         retour = next((r for r in self.retours if r[0] <= self.n_invites and r[1] in self.vivier), None)
         if retour is not None:
@@ -273,8 +290,10 @@ class PartieBombe:
             cible = self.vivier[cid]
             # Le retour doit désigner la cible ou presque : on allonge jusqu'à être à portée.
             plafond = self.params.get("revelation_max", 30)
+            long_max = max(self.params["long_min"], self.params["long_max"])
+            longueur = min(longueur, long_max)
             s = self._suite_distinctive(cible["forme"], longueur=longueur)
-            for L in range(longueur + 1, len(normaliser(cible["forme"]))):
+            for L in range(longueur + 1, min(long_max, len(normaliser(cible["forme"])) - 1) + 1):
                 if self.n_solutions(s) <= plafond:
                     break
                 s = self._suite_distinctive(cible["forme"], longueur=L)
@@ -390,6 +409,7 @@ class PartieBombe:
                                                         reponse=texte, correct=True, latence_ms=latence_ms,
                                                         frappe=frappe or Frappe(), data=data))
             retour.revelation = self._apres_echec_cible(texte)
+        retour.trouvaille = trouvailles(self.con, eid)
         self.score += retour.points
         return retour
 

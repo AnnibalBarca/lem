@@ -677,6 +677,7 @@ class EcranBombe(EcranPartie):
         self.maj("minuterie", barre(frac, 60, BLANC if frac > 0.25 else "#ff5f5f"))
         if reste <= 0:
             r = self.partie.exploser()
+            self.query_one("#saisie", Input).value = ""      # la tentative ne vaut plus pour la nouvelle suite
             self._retour(r, None)
             if self.partie.finie:
                 self._fin()
@@ -696,6 +697,11 @@ class EcranBombe(EcranPartie):
             t += ligne_proximite(r.proximite, mot or "")
         elif not r.valide:
             t.append(r.message, style=GRIS)
+        if r.valide and r.trouvaille and mot:
+            n, med = r.trouvaille["n"], r.trouvaille["latence_mediane_ms"]
+            t.append(f"{'' if not t.plain else '   '}{mot}", style=f"bold {BLANC}")
+            t.append("  1ʳᵉ fois" if n <= 1 else f"  {n}ᵉ fois · d'habitude {med / 1000:.1f} s".replace(".", ","),
+                     style=GRIS)
         if r.vie_gagnee:
             t.append("   +♥", style=f"bold {BLANC}")
         if r.revelation:
@@ -730,7 +736,7 @@ class EcranBombe(EcranPartie):
             return
         if not texte or self.commande(texte) or not self.pret:
             return
-        ev.input.value = ""
+        # La saisie reste dans le champ tant que le mot n'est pas validé : « meurtree » se corrige d'un effacement.
         lat, frappe = self.chrono.mesures()
         self.en_fond(lambda: self.partie.repondre(texte, lat, frappe), lambda r: self._apres_reponse(r, texte))
 
@@ -742,6 +748,7 @@ class EcranBombe(EcranPartie):
     def _apres_reponse(self, r, texte: str) -> None:
         self._retour(r, r.forme or texte)
         if r.valide:
+            self.query_one("#saisie", Input).value = ""
             self._afficher_invite()
 
     def _fin(self) -> None:
