@@ -1,3 +1,5 @@
+import pytest
+
 from lem.games import REGISTRE
 from lem.games.base import executer_commande
 from lem.games.bombe import PartieBombe
@@ -138,3 +140,23 @@ def test_etalonnage_met_a_jour_la_carte(con, carte, rng):
             d.verification("une définition", 3000)
     assert d.fausses_alertes == 0
     assert con.execute("SELECT COUNT(*) FROM theta").fetchone()[0] > 0
+
+
+def test_calcul_vectoriel_identique(con, carte, rng):
+    """p_tous et la Bombe vectorisée donnent exactement ce que donnait le calcul entrée par entrée."""
+    ids = list(carte._prior)
+    for eid in rng.sample(ids, 10):
+        carte.observer(eid, rng.random(), persister=False)
+    p = carte.p_tous()
+    for eid, k in zip(carte.ids, range(len(p))):
+        assert p[k] == pytest.approx(carte.p(int(eid)), abs=1e-12)
+    b = PartieBombe(con, params("bombe", mode="libre"), carte, rng=rng)
+    for suite in ("on", "ym", "e", "zzz"):
+        n, k = 0, 0.0
+        for eid, fs in b.formes_vivier.items():
+            if any(suite in f for f in fs):
+                n, k = n + 1, k + carte.p(eid)
+        assert b.solutions(suite) == (n, pytest.approx(k, abs=1e-9))
+    carte.observer(ids[0], 1.0, persister=False)              # θ change : K suit
+    n, k = b.solutions("e")
+    assert k == pytest.approx(sum(carte.p(e) for e, fs in b.formes_vivier.items() if any("e" in f for f in fs)))

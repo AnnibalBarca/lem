@@ -123,9 +123,12 @@ class PartieBombe:
         """Toutes les formes valides du français (comme JKLM, indépendamment des filtres).
 
         Graphie exacte exigée : accents compris. Aucune variante n'est acceptée."""
-        self.valides: dict[str, set[int]] = {}
+        # ≈ 2 M formes sur la vraie base : des tuples plutôt que des ensembles (5× moins de mémoire).
+        self.valides: dict[str, tuple[int, ...]] = {}
+        get = self.valides.get
         for forme, eid in self.con.execute("SELECT forme, entree_id FROM forme"):
-            self.valides.setdefault(forme, set()).add(eid)
+            ids = get(forme)
+            self.valides[forme] = (eid,) if ids is None else ids + (eid,)
         self._candidats: dict[str, list[str]] = {}
 
     def reconfigurer(self) -> None:
@@ -133,7 +136,13 @@ class PartieBombe:
         rows = selectionner(self.con, filtres_depuis(self.params))
         self.vivier = {r["id"]: r for r in rows}
         formes: dict[int, list[str]] = {}
-        if self.vivier:
+        if len(self.vivier) > 50_000:
+            # Vivier large (sans filtre : tout le lexique) : un seul parcours de l'index plutôt que des IN.
+            vivier = self.vivier
+            for norme, eid in self.con.execute("SELECT norme, entree_id FROM forme ORDER BY entree_id"):
+                if eid in vivier:
+                    formes.setdefault(eid, []).append(norme)
+        elif self.vivier:
             ids = list(self.vivier)
             for i in range(0, len(ids), 900):
                 bloc = ids[i : i + 900]
@@ -142,16 +151,36 @@ class PartieBombe:
                 ):
                     formes.setdefault(eid, []).append(norme)
         self.formes_vivier = formes
+        # Pour `solutions` : les formes de chaque entrée du vivier en une chaîne, et sa place dans la carte.
+        self._ids_vivier = list(formes)
+        self._textes_vivier = ["\x00".join(fs) for fs in formes.values()]
+        self._pos_vivier = self.carte.positions(self._ids_vivier)
+        self._n_cache: dict[str, int] = {}
+        self._cibles = [r for r in self.vivier.values() if len(r["forme"]) >= self.params["long_min"] + 1
+                        and r["forme"].replace("-", "").isalpha()]
         self.index = IndexFormel(self.con, set(self.vivier)) if self.params["mode"] == "confusables" else None
 
     def solutions(self, suite: str) -> tuple[int, float]:
         """(nombre de mots du vivier contenant la suite, K = Σ P(connu))."""
-        n, k = 0, 0.0
-        for eid, fs in self.formes_vivier.items():
-            if any(suite in f for f in fs):
-                n += 1
-                k += self.carte.p(eid)
-        return n, k
+        idx = [i for i, t in enumerate(self._textes_vivier) if suite in t]
+        self._n_cache[suite] = len(idx)
+        if not idx:
+            return 0, 0.0
+        pos = self._pos_vivier[idx]
+        p = self.carte.p_tous()
+        absents = pos < 0
+        k = float(p[pos[~absents]].sum())
+        if absents.any():
+            k += sum(self.carte.p(self._ids_vivier[i]) for i, a in zip(idx, absents) if a)
+        return len(idx), k
+
+    def n_solutions(self, suite: str) -> int:
+        """Nombre de mots du vivier contenant la suite (ne dépend que du vivier : mis en cache)."""
+        n = self._n_cache.get(suite)
+        if n is None:
+            n = sum(1 for t in self._textes_vivier if suite in t)
+            self._n_cache[suite] = n
+        return n
 
     # -- choix de l'invite ----------------------------------------------------
     def _duree(self) -> float:
@@ -181,8 +210,7 @@ class PartieBombe:
         return Invite("e", k=0, n_solutions=0, duree=self._duree())
 
     def _choisir_cible(self) -> sqlite3.Row | None:
-        cands = [r for r in self.vivier.values() if len(r["forme"]) >= self.params["long_min"] + 1
-                 and r["forme"].replace("-", "").isalpha()]
+        cands = self._cibles
         if not cands:
             return None
         # difficulté ∈ [0, 1] : 0 → cibles plutôt connues, 1 → plutôt inconnues.
@@ -204,7 +232,7 @@ class PartieBombe:
                 subs = set(partages)
         if not subs:
             return f[:L]
-        return min(subs, key=lambda s: (self.solutions(s)[0] if communs is None else -sum(
+        return min(subs, key=lambda s: (self.n_solutions(s) if communs is None else -sum(
             s in normaliser(c) for c in communs), self.rng.random()))
 
     def nouvelle_invite(self) -> Invite:
@@ -243,18 +271,20 @@ class PartieBombe:
         if any(len(x) >= len(c) for x in cands):
             return None
         evite_n = [normaliser(e) for e in evite]
-        cands.sort(key=lambda x: (sum(x in e for e in evite_n), self.solutions(x)[0]))
+        cands.sort(key=lambda x: (sum(x in e for e in evite_n), self.n_solutions(x)))
         return cands[0]
 
     # -- tour de jeu ---------------------------------------------------------
     def _valider(self, texte: str) -> tuple[str | None, set[int]]:
         cle = texte.strip().lower()
-        return cle, self.valides.get(cle, set())
+        return cle, set(self.valides.get(cle, ()))
 
     def _diagnostic(self, texte: str) -> Diagnostic | None:
         suite = self.invite.suite
         if suite not in self._candidats:
-            self._candidats[suite] = [k for k in self.valides if suite in normaliser(k)]
+            # `norme` = normaliser(forme), calculée à l'ingestion : un balayage SQL plutôt que 2 M appels.
+            self._candidats[suite] = [r[0] for r in self.con.execute(
+                "SELECT DISTINCT forme FROM forme WHERE instr(norme, ?) > 0", (suite,))]
         return diagnostiquer(self.con, texte, self.invite.cible_id, self._candidats[suite])
 
     def repondre(self, texte: str, latence_ms: int, frappe: Frappe | None = None) -> Retour:

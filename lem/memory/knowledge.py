@@ -98,6 +98,20 @@ def calibrer(con: sqlite3.Connection, params: ParamsPrior | None = None) -> Para
     return params
 
 
+SQL_DOMAINES = """SELECT DISTINCT s.entree_id, d.nom FROM sens s JOIN sens_domaine sd ON sd.sens_id = s.id
+                  JOIN domaine d ON d.id = sd.domaine_id"""
+SQL_MORPHS = "SELECT em.entree_id, m.forme FROM entree_morpheme em JOIN morpheme m ON m.id = em.morpheme_id"
+
+
+def _dimensions(zipf, origine, type_, domaines, morphs) -> list[str]:
+    dims = ["global", bande_zipf(zipf), f"type:{type_}"]
+    if origine:
+        dims.append(f"origine:{origine}")
+    dims += [f"domaine:{d}" for d in domaines]
+    dims += [f"morph:{m}" for m in morphs]
+    return dims
+
+
 class CarteConnaissance:
     """Vue en mémoire de la carte, mise à jour en direct pendant une session."""
 
@@ -116,6 +130,8 @@ class CarteConnaissance:
             self._prior[r["entree_id"]] = r["p_prior"]
             self._residu[r["entree_id"]] = r["residu"]
             self._nobs[r["entree_id"]] = r["n_obs"]
+        self._vec = None          # structure vectorielle (p_tous), chargée à la demande
+        self._version = 0         # incrémentée à chaque changement de θ ou de résidu
 
     # -- dimensions -------------------------------------------------------
     def dimensions(self, entree_id: int) -> list[str]:
@@ -124,20 +140,9 @@ class CarteConnaissance:
         e = self.con.execute("SELECT zipf, origine, type FROM entree WHERE id = ?", (entree_id,)).fetchone()
         if e is None:
             return []
-        dims = ["global", bande_zipf(e["zipf"]), f"type:{e['type']}"]
-        if e["origine"]:
-            dims.append(f"origine:{e['origine']}")
-        for r in self.con.execute(
-            """SELECT DISTINCT d.nom FROM sens s JOIN sens_domaine sd ON sd.sens_id = s.id
-               JOIN domaine d ON d.id = sd.domaine_id WHERE s.entree_id = ?""",
-            (entree_id,),
-        ):
-            dims.append(f"domaine:{r['nom']}")
-        for r in self.con.execute(
-            "SELECT m.forme FROM entree_morpheme em JOIN morpheme m ON m.id = em.morpheme_id WHERE em.entree_id = ?",
-            (entree_id,),
-        ):
-            dims.append(f"morph:{r['forme']}")
+        domaines = [r[1] for r in self.con.execute(SQL_DOMAINES + " WHERE s.entree_id = ?", (entree_id,))]
+        morphs = [r[1] for r in self.con.execute(SQL_MORPHS + " WHERE em.entree_id = ?", (entree_id,))]
+        dims = _dimensions(e["zipf"], e["origine"], e["type"], domaines, morphs)
         self._dims[entree_id] = dims
         return dims
 
@@ -147,6 +152,74 @@ class CarteConnaissance:
         x = logit(prior) + sum(self.theta.get(d, 0.0) for d in self.dimensions(entree_id))
         x += self._residu.get(entree_id, 0.0)
         return 1.0 / (1.0 + math.exp(-x))
+
+    def p_tous(self) -> np.ndarray:
+        """P(connu) de toutes les entrées de la carte d'un coup (même calcul que `p`), dans l'ordre de `ids`.
+
+        Les dimensions de chaque entrée sont chargées une fois, en tableaux : colonnes catégorielles (bande
+        de Zipf, type, origine) et liens (domaines, morphèmes). θ est relu à chaque changement. Sert aux jeux
+        qui somment P sur des centaines de milliers de mots (K de la Bombe)."""
+        v = self._vec
+        if v is None:
+            v = self._vec = self._charger_vec()
+        if v["version"] != self._version:
+            n = len(v["ids"])
+            th = lambda noms: np.array([self.theta.get(d, 0.0) for d in noms], dtype=np.float64)  # noqa: E731
+            x = v["logit_prior"] + np.where(v["connue"], self.theta.get("global", 0.0), 0.0)
+            for cle, noms in (("zipf", [f"zipf:{b}" for b in range(6)]), ("type", v["types"]),
+                              ("origine", v["origines"])):
+                code = v[cle]
+                ok = code >= 0
+                x[ok] += th(noms)[code[ok]]
+            x += np.bincount(v["lignes"], weights=th(v["noms"])[v["dims"]], minlength=n)
+            x += np.fromiter((self._residu.get(int(i), 0.0) for i in v["ids"]), dtype=np.float64, count=n)
+            v["p"], v["version"] = sigmoid(x), self._version
+        return v["p"]
+
+    @property
+    def ids(self) -> np.ndarray:
+        if self._vec is None:
+            self._vec = self._charger_vec()
+        return self._vec["ids"]
+
+    def positions(self, ids) -> np.ndarray:
+        """Indices dans `p_tous()` des entrées données (−1 si absente de la carte)."""
+        if self._vec is None:
+            self._vec = self._charger_vec()
+        pos = self._vec["pos"]
+        return np.array([pos.get(int(i), -1) for i in ids], dtype=np.int64)
+
+    def _charger_vec(self) -> dict:
+        ids = np.fromiter(self._prior, dtype=np.int64, count=len(self._prior))
+        n = len(ids)
+        pos = {int(i): k for k, i in enumerate(ids)}
+        # Colonnes catégorielles : code −1 = pas de dimension (entrée inconnue, origine vide).
+        connue = np.zeros(n, dtype=bool)
+        zipf, types, origines = np.full(n, -1), np.full(n, -1), np.full(n, -1)
+        noms_t: dict[str, int] = {}
+        noms_o: dict[str, int] = {}
+        for eid, z, origine, type_ in self.con.execute("SELECT id, zipf, origine, type FROM entree"):
+            k = pos.get(eid)
+            if k is None:
+                continue
+            connue[k] = True
+            zipf[k] = int(bande_zipf(z)[5:])
+            types[k] = noms_t.setdefault(f"type:{type_}", len(noms_t))
+            if origine:
+                origines[k] = noms_o.setdefault(f"origine:{origine}", len(noms_o))
+        noms: dict[str, int] = {}
+        lignes, dims = [], []
+        for sql, prefixe in ((SQL_DOMAINES, "domaine:"), (SQL_MORPHS, "morph:")):
+            for eid, nom in self.con.execute(sql):
+                k = pos.get(eid)
+                if k is not None and connue[k]:
+                    lignes.append(k)
+                    dims.append(noms.setdefault(prefixe + nom, len(noms)))
+        prior = np.clip(np.array([self._prior[int(i)] for i in ids], dtype=np.float64), 1e-6, 1 - 1e-6)
+        return {"ids": ids, "pos": pos, "connue": connue, "zipf": zipf, "types": list(noms_t), "type": types,
+                "origines": list(noms_o), "origine": origines, "noms": list(noms),
+                "lignes": np.array(lignes, dtype=np.int64), "dims": np.array(dims, dtype=np.int64),
+                "logit_prior": np.log(prior / (1 - prior)), "version": -1, "p": None}
 
     def n_obs(self, entree_id: int) -> int:
         return self._nobs.get(entree_id, 0)
@@ -164,6 +237,7 @@ class CarteConnaissance:
         n = self._nobs.get(entree_id, 0)
         self._residu[entree_id] = self._residu.get(entree_id, 0.0) + LR_RESIDU / (1.0 + n / 3.0) * err
         self._nobs[entree_id] = n + 1
+        self._version += 1
         nouveau = self.p(entree_id)
         if persister:
             self._persister(entree_id, nouveau)
@@ -198,6 +272,7 @@ class CarteConnaissance:
         self.n_theta.clear()
         self._residu = {k: 0.0 for k in self._residu}
         self._nobs = {k: 0 for k in self._nobs}
+        self._version += 1
         self.con.execute("DELETE FROM theta")
         self.con.execute("UPDATE connaissance SET residu = 0, n_obs = 0, p_connu = p_prior")
         self.con.commit()
