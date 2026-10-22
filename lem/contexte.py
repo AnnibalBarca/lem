@@ -38,6 +38,13 @@ class Contexte:
         return None
 
     @cached_property
+    def lexique(self):
+        """Index compact des formes (lem.lexique), partagé par tous les jeux de la session."""
+        from lem.lexique import Lexique
+
+        return Lexique(self.con)
+
+    @cached_property
     def carte(self) -> CarteConnaissance:
         return CarteConnaissance(self.con)
 

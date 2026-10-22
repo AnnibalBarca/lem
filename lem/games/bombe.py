@@ -29,6 +29,8 @@ import statistics
 from collections import deque
 from dataclasses import dataclass, field
 
+import numpy as np
+
 from lem.confusables import IndexFormel
 from lem.games.base import PARAMS_FILTRES, Jeu, Param, enregistrer, filtres_depuis
 from lem.games.pool import selectionner
@@ -69,6 +71,20 @@ BOMBE = enregistrer(Jeu(
 
 
 TYPES_HORS_JEU = ("nom_propre", "sigle")
+SEP = "\x00"
+
+
+class _Valides:
+    """Vue « forme → entrées valides » sur l'index du lexique (types exclus retirés)."""
+
+    def __init__(self, lex, exclus: tuple[str, ...]):
+        self.lex, self.exclus = lex, exclus
+
+    def get(self, forme: str, defaut=None):
+        return self.lex.entrees(forme, self.exclus) or defaut
+
+    def __contains__(self, forme: str) -> bool:
+        return bool(self.lex.entrees(forme, self.exclus))
 
 
 @dataclass
@@ -100,8 +116,10 @@ class Retour:
 
 class PartieBombe:
     def __init__(self, con: sqlite3.Connection, params: dict, carte: CarteConnaissance | None = None,
-                 magasin_entrees=None, session_id: int | None = None, rng: random.Random | None = None):
+                 magasin_entrees=None, session_id: int | None = None, rng: random.Random | None = None,
+                 lexique=None):
         self.con, self.params = con, params
+        self.lex = lexique
         self.carte = carte or CarteConnaissance(con)
         self.magasin = magasin_entrees
         self.session_id = session_id
@@ -127,55 +145,32 @@ class PartieBombe:
         return () if self.params.get("noms_propres") else TYPES_HORS_JEU
 
     def _univers(self) -> None:
-        """Toutes les formes valides du français (comme JKLM, indépendamment des filtres).
+        """Toutes les formes valides du français (comme JKLM, indépendamment des filtres), via l'index compact
+        du lexique (lem.lexique : partagé, gardé sur disque) — plus 2 M chaînes Python à chaque partie."""
+        if self.lex is None:
+            from lem.lexique import Lexique
+            self.lex = Lexique(self.con)
+        self._candidats: dict[tuple[str, int], list[str]] = {}
 
-        Graphie exacte exigée : accents compris. Aucune variante n'est acceptée."""
-        # ≈ 2 M formes sur la vraie base : des tuples plutôt que des ensembles (5× moins de mémoire).
-        self.valides: dict[str, tuple[int, ...]] = {}
-        # norme → forme(s) : candidats du diagnostic de graphie, cherchés en mémoire. Un balayage SQL des
-        # 2 M formes relit le disque sous WSL2 (le cache de pages est rendu à Windows) : 3 s par faute.
-        self._normes: dict[str, str | tuple[str, ...]] = {}
-        get, getn = self.valides.get, self._normes.get
-        exclus = self._exclus_univers = self._exclus()
-        for forme, norme, eid, type_ in self.con.execute(
-                "SELECT f.forme, f.norme, f.entree_id, e.type FROM forme f JOIN entree e ON e.id = f.entree_id"):
-            if type_ in exclus:
-                continue
-            ids = get(forme)
-            self.valides[forme] = (eid,) if ids is None else ids + (eid,)
-            fs = getn(norme)
-            if fs is None:
-                self._normes[norme] = forme
-            elif fs != forme and (isinstance(fs, str) or forme not in fs):
-                self._normes[norme] = (fs, forme) if isinstance(fs, str) else fs + (forme,)
-        self._candidats: dict[str, list[str]] = {}
+    @property
+    def valides(self) -> "_Valides":
+        return _Valides(self.lex, self._exclus())
+
+    @property
+    def formes_vivier(self) -> dict[int, list[str]]:
+        """Normes des formes de chaque entrée du vivier (calculé à la demande : tests, outils)."""
+        return {e: t.split(SEP) for e, t in zip(self._ids_vivier, self._textes_vivier) if t}
 
     def reconfigurer(self) -> None:
         """(Re)construit le vivier après un changement de paramètres (/domaine, /etat…)."""
-        if self._exclus() != self._exclus_univers:
-            self._univers()
         exclus = self._exclus()
         rows = selectionner(self.con, filtres_depuis(self.params))
         self.vivier = {r["id"]: r for r in rows if r["type"] not in exclus}
-        formes: dict[int, list[str]] = {}
-        if len(self.vivier) > 50_000:
-            # Vivier large (sans filtre : tout le lexique) : un seul parcours de l'index plutôt que des IN.
-            vivier = self.vivier
-            for norme, eid in self.con.execute("SELECT norme, entree_id FROM forme ORDER BY entree_id"):
-                if eid in vivier:
-                    formes.setdefault(eid, []).append(norme)
-        elif self.vivier:
-            ids = list(self.vivier)
-            for i in range(0, len(ids), 900):
-                bloc = ids[i : i + 900]
-                for norme, eid in self.con.execute(
-                    f"SELECT norme, entree_id FROM forme WHERE entree_id IN ({', '.join('?' * len(bloc))})", bloc
-                ):
-                    formes.setdefault(eid, []).append(norme)
-        self.formes_vivier = formes
-        # Pour `solutions` : les formes de chaque entrée du vivier en une chaîne, et sa place dans la carte.
-        self._ids_vivier = list(formes)
-        self._textes_vivier = ["\x00".join(fs) for fs in formes.values()]
+        # Pour `solutions` : les normes de chaque entrée du vivier en une chaîne, et sa place dans la carte.
+        self._ids_vivier = list(self.vivier)
+        ks = np.searchsorted(self.lex.eids, np.asarray(self._ids_vivier, dtype=np.int64))
+        self._textes_vivier = [self.lex.textes[k] if k < len(self.lex) and self.lex.eids[k] == e else ""
+                               for k, e in zip(ks.tolist(), self._ids_vivier)]
         self._pos_vivier = self.carte.positions(self._ids_vivier)
         self._n_cache: dict[str, int] = {}
         self._cibles = [r for r in self.vivier.values() if len(r["forme"]) >= self.params["long_min"] + 1
@@ -219,11 +214,11 @@ class PartieBombe:
         return self.rng.randint(lo, hi)
 
     def _invite_libre(self) -> Invite:
-        formes = [f for fs in self.formes_vivier.values() for f in fs]
+        textes = [t for t in self._textes_vivier if t]
         for _ in range(60):
-            if not formes:
+            if not textes:
                 break
-            f = self.rng.choice(formes)
+            f = self.rng.choice(self.rng.choice(textes).split(SEP))
             L = self._longueur()
             if len(f) < L:
                 continue
@@ -309,28 +304,31 @@ class PartieBombe:
     # -- tour de jeu ---------------------------------------------------------
     def _valider(self, texte: str) -> tuple[str | None, set[int]]:
         """(forme reconnue, entrées). Sans certains accents, la forme accentuée compte si le réglage le permet."""
-        cle = texte.strip().lower()
-        ids = self.valides.get(cle)
-        if ids is None and self.accents_tolerants:
-            fs = self._normes.get(normaliser(cle), ())
-            for f in ((fs,) if isinstance(fs, str) else fs):
-                if accents_manquants(cle, f):
-                    return f, set(self.valides.get(f, ()))
-        return cle, set(ids or ())
+        cle, exclus = texte.strip().lower(), self._exclus()
+        ids = self.lex.entrees(cle, exclus)
+        if not ids and self.accents_tolerants:
+            for f in self.lex.formes_de_norme(normaliser(cle)):
+                if accents_manquants(cle, f) and (ids_f := self.lex.entrees(f, exclus)):
+                    return f, set(ids_f)
+        return cle, set(ids)
 
     def _diagnostic(self, texte: str) -> Diagnostic | None:
-        suite = self.invite.suite
-        if suite not in self._candidats:
-            # `norme` = normaliser(forme), calculée à l'ingestion.
-            cands: list[str] = []
-            for norme, fs in self._normes.items():
-                if suite in norme:
-                    if isinstance(fs, str):
-                        cands.append(fs)
-                    else:
-                        cands.extend(fs)
-            self._candidats[suite] = cands
-        return diagnostiquer(self.con, texte, self.invite.cible_id, self._candidats[suite])
+        """Faute de graphie ? Candidats : formes valides contenant la suite, de longueur voisine (±2) — une
+        faute plausible garde à peu près la longueur du mot visé, et ce filtre évite de reconstruire des
+        centaines de milliers de formes pour une suite courante."""
+        from rapidfuzz import process
+        from rapidfuzz.distance import OSA
+
+        suite, norme = self.invite.suite, normaliser(texte)
+        n = len(norme)
+        cle = (suite, n)
+        if cle not in self._candidats:
+            self._candidats[cle] = self.lex.normes_contenant(suite, range(max(1, n - 2), n + 3))
+        # Les 30 normes les plus proches (en C), puis seulement leurs formes : jamais 170 k chaînes en Python.
+        proches = process.extract(norme, self._candidats[cle], scorer=OSA.distance, limit=30, score_cutoff=3)
+        exclus = self._exclus()
+        cands = [f for x, _, _ in proches for f in self.lex.formes_de_norme(x) if self.lex.entrees(f, exclus)]
+        return diagnostiquer(self.con, texte, self.invite.cible_id, list(dict.fromkeys(cands)))
 
     def repondre(self, texte: str, latence_ms: int, frappe: Frappe | None = None) -> Retour:
         texte = nettoyer_saisie(texte)

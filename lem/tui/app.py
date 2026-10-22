@@ -628,7 +628,8 @@ class EcranBombe(EcranPartie):
     def construire(self):
         from lem.games.bombe import PartieBombe
 
-        return PartieBombe(self.ctx.con, self.params, self.ctx.carte, self.ctx.magasin_entrees, self.session_id)
+        return PartieBombe(self.ctx.con, self.params, self.ctx.carte, self.ctx.magasin_entrees, self.session_id,
+                           lexique=self.ctx.lexique)
 
     def demarrer(self) -> None:
         self.historique: list[Text] = []
