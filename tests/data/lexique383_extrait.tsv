@@ -1,0 +1,6 @@
+ortho	phon	lemme	cgram	genre	nombre	freqlemfilms2	freqlemlivres	freqfilms2	freqlivres	infover	nbhomogr	nbhomoph	islem	nblettres	nbphons	cvcv	p_cvcv	voisorth	voisphon	puorth	puphon	syll	nbsyll	cv-cv	orthrenv	phonrenv	orthosyll	cgramortho	deflem	defobs	old20	pld20	morphoder	nbmorph
+acronyme	akRonim	acronyme	NOM	m	s	0.19	0.07	0.19	0.07		1	1	1	8	7	VCCVCVCV	VCCVCVC	0	0	5	5	a-kRo-nim	3	V-CCV-CVC	emynorca	minoRka	a-cro-ny-me	NOM	80	26	2.8	2.75	acronyme	1
+mitose	mitoz	mitose	NOM	f	s	0.14	0.00	0.14	0.00		1	1	1	6	5	CVCVCV	CVCVC	0	3	5	5	mi-toz	2	CV-CVC	esotim	zotim	mi-to-se	NOM	50	18	2	1.8	mitose	1
+ortho	ORto	ortho	ADV			0.56	0.27	0.56	0.27		1	1	1	5	4	VCCCV	VCCV	0	4	5	4	OR-to	2	VC-CV	ohtro	otRO	or-tho	ADV			2.45	1.75	ortho	1
+sigle	sigl	sigle	NOM	m	s	0.70	1.62	0.56	1.01		1	4	1	5	4	CVCCV	CVCC	5	8	4	4	sigl	1	CVCC	elgis	lgis	si-gle	NOM	93	15	1.6	1.45	sigle	1
+sigles	sigl	sigle	NOM	m	p	0.70	1.62	0.14	0.61		1	4	0	6	4	CVCCVC	CVCC	3	8	0	4	sigl	1	CVCC	selgis	lgis	si-gles	NOM	93	15	1.7	1.45	sigle	1

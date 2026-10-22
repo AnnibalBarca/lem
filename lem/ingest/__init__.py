@@ -17,6 +17,7 @@ import json
 import math
 import re
 import sqlite3
+import unicodedata
 from importlib import resources
 from pathlib import Path
 from typing import Callable, Iterator
@@ -142,8 +143,13 @@ def lexique(con: sqlite3.Connection, path: str | Path, progression: Progression 
 POS_WIKT = {
     "noun": "nom", "name": "nom_propre", "adj": "adj", "verb": "verbe", "adv": "adv", "phrase": "expr",
     "proverb": "expr", "idiom": "expr", "prep_phrase": "expr", "intj": "interj", "prep": "prep",
+    "onomatopoeia": "interj", "pron": "pron", "conj": "conj", "det": "det", "article": "det", "num": "num",
+    "particle": "part", "postp": "prep",
     "nom": "nom", "adjectif": "adj", "verbe": "verbe", "adverbe": "adv", "locution": "expr",
 }
+# Ni des mots à apprendre ni des sens : affixes, lettres, symboles, variantes typographiques.
+POS_IGNORES = {"prefix", "suffix", "infix", "interfix", "circumfix", "character", "symbol", "typographic variant",
+               "punctuation"}
 TYPE_PAR_POS = {"nom_propre": "nom_propre", "expr": "expression"}
 LANGUES_ORIGINE = (
     "grec", "latin", "anglais", "allemand", "italien", "espagnol", "arabe", "néerlandais", "danois",
@@ -151,11 +157,31 @@ LANGUES_ORIGINE = (
     "portugais", "occitan", "provençal", "breton", "gaulois", "francique", "sanskrit", "hindi", "malais",
     "nahuatl", "quechua", "tupi", "polonais", "tchèque", "hongrois", "finnois", "basque", "catalan",
 )
-RE_ORIGINE = re.compile(r"\b(?:du|de l['’]|de la|des|emprunté (?:au|à l['’]))\s*(?:ancien |bas |moyen |vieux )?("
-                        + "|".join(LANGUES_ORIGINE) + r")", re.I)
+RE_ORIGINE = re.compile(r"\b(?:du|de l['’]|de la|des|emprunt(?:é)? (?:au|à l['’]|à la|du|de l['’]))\s*"
+                        r"(?:ancien |bas |moyen |vieux |vieil )?(" + "|".join(LANGUES_ORIGINE) + r")", re.I)
 RE_MORPHEME = re.compile(r"(?<![\w-])((?:-[a-zàâäéèêëîïôöùûüç]{2,})|(?:[a-zàâäéèêëîïôöùûüç]{2,}-))(?![\w])"
                          r"(?:\s*\(?\s*«\s*([^»]{1,40})\s*»)?")
 RE_DOMAINE_GLOSE = re.compile(r"^\s*\(([^)]{2,40})\)\s*")
+RE_SIGLE = re.compile(r"^\s*(?:sigle|acronyme|abréviation)\b", re.I)
+RE_LOCUTION_EXPR = re.compile(r"^Locution[- ](?:verbale|adverbiale|phrase|interjective|prépositive|conjonctive|pronominale)")
+# raw_tags du Wiktionnaire : domaines mêlés aux régions (« Québec ») et aux qualificatifs (« Très rare »).
+# On ne garde qu'un domaine connu de la hiérarchie, ou un nom de discipline reconnaissable à son suffixe.
+RE_DISCIPLINE = re.compile(r"^[a-zàâäéèêëîïôöùûüçœ’ -]+(?:logie|graphie|nomie|technie|culture|iatrie|métrie)$")
+
+
+# API → code phonétique de Lexique (une lettre par phonème), pour que `entree.phon` reste comparable
+# d'une source à l'autre (similarite.sim_forme compare deux transcriptions).
+API_LEXIQUE = [("ɑ̃", "@"), ("ɛ̃", "5"), ("ɔ̃", "§"), ("œ̃", "1"), ("ʁ", "R"), ("ʀ", "R"), ("r", "R"), ("ʃ", "S"),
+               ("ʒ", "Z"), ("ɛ", "E"), ("ɔ", "O"), ("ø", "2"), ("œ", "9"), ("ə", "°"), ("ɑ", "a"), ("ɲ", "N"),
+               ("ŋ", "G"), ("ɥ", "8"), ("ɡ", "g"), ("χ", "x")]
+RE_API_BRUIT = re.compile(r"[\\\[\]/.ˈˌ‿ːː͡( )]")
+
+
+def api_vers_lexique(api: str) -> str:
+    api = unicodedata.normalize("NFC", RE_API_BRUIT.sub("", api.split(",")[0]))
+    for a, b in API_LEXIQUE:
+        api = api.replace(unicodedata.normalize("NFC", a), b)
+    return api
 
 
 def origine_depuis(etymologie: str) -> str | None:
@@ -178,29 +204,75 @@ def _lignes(path: str | Path) -> Iterator[dict]:
                     continue
 
 
+def _sujets() -> dict[str, str | None]:
+    sujets = json.loads(resources.files("lem.data").joinpath("sujets_wiktextract.json").read_text(encoding="utf-8"))
+    sujets.pop("_doc", None)
+    return sujets
+
+
+def _forme_de(e: dict, s: dict) -> str | None:
+    """Lemme dont ce sens n'est qu'une forme fléchie (« Pluriel d'acronyme. »), sinon None."""
+    if "form-of" not in (s.get("tags") or []) and "form-of" not in (e.get("tags") or []):
+        return None
+    return next((f.get("word") for f in s.get("form_of", []) if f.get("word")), None) or ""
+
+
 def wiktionnaire(con: sqlite3.Connection, path: str | Path, progression: Progression = None,
                  langue: str = "fr") -> int:
+    """Wiktionnaire français extrait par wiktextract (kaikki.org/frwiktionary), une entrée JSON par ligne.
+
+    Les entrées « Forme de … » (≈ 1,5 M : pluriels, féminins, conjugaisons) ne deviennent pas des entrées :
+    elles s'ajoutent aux formes fléchies de leur lemme."""
     parents = charger_domaines(con)
+    sujets = _sujets()
+    connus = set(parents) | {d for d in sujets.values() if d}
     n = 0
     synonymes: list[tuple[int, str]] = []
+    flexions: list[tuple[str, str, str]] = []          # (forme, lemme, pos)
+
+    def domaines_du_sens(s: dict) -> list[str]:
+        ds = [sujets.get(t, t) for t in s.get("topics", [])]
+        for t in s.get("raw_tags", []):
+            t = t.strip().lower()
+            if t in connus or RE_DISCIPLINE.match(t):
+                ds.append(t)
+        return [d for d in ds if d]
+
     for i, e in enumerate(_lignes(path)):
-        if e.get("lang_code", langue) != langue or not e.get("word"):
+        if e.get("lang_code", langue) != langue or not e.get("word") or e.get("pos") in POS_IGNORES:
             continue
         pos = POS_WIKT.get(e.get("pos", ""), e.get("pos", ""))
         mot = e["word"]
-        etym = " ".join(e.get("etymology_texts") or [e.get("etymology_text") or ""]).strip()
-        type_ = TYPE_PAR_POS.get(pos) or ("compose" if re.search(r"[ \-]", mot) else "mot")
-        phon = next((s.get("ipa") for s in e.get("sounds", []) if s.get("ipa")), None)
+        sens = []
+        for s in e.get("senses", []):
+            lemme = _forme_de(e, s)
+            if lemme is None:
+                sens.append(s)
+            elif lemme:
+                flexions.append((mot, lemme, pos))
+        if not sens:
+            continue
+        etyms = e.get("etymology_texts") or [e.get("etymology_text") or ""]
+        etym = " ".join(etyms).strip()
+        titre = e.get("pos_title") or ""
+        type_ = TYPE_PAR_POS.get(pos)
+        if RE_SIGLE.match(etyms[0] or "") or titre.startswith(("Sigle", "Acronyme")):
+            type_ = "sigle"
+        elif RE_LOCUTION_EXPR.match(titre):
+            type_ = "expression"
+        type_ = type_ or ("compose" if re.search(r"[ \-]", mot) else "mot")
+        phon = next((api_vers_lexique(s["ipa"]) for s in e.get("sounds", []) if s.get("ipa")), None)
+        # L'origine se lit dans le premier paragraphe d'étymologie ; les suivants racontent l'histoire du mot.
         eid = upsert_entree(con, mot, pos, langue=langue, type=type_, phon=phon,
-                            origine=origine_depuis(etym), etymologie=etym or None)
+                            origine=origine_depuis(etyms[0]), etymologie=etym or None)
         ajouter_formes(con, eid, [f.get("form", "") for f in e.get("forms", []) if " " not in f.get("form", " ")])
         rang = con.execute("SELECT COALESCE(MAX(rang), 0) FROM sens WHERE entree_id = ?", (eid,)).fetchone()[0]
-        for s in e.get("senses", []):
+        for s in sens:
             gloses = s.get("glosses") or s.get("raw_glosses") or []
             if not gloses:
                 continue
             definition = gloses[-1]
-            domaines = list(s.get("topics", [])) + list(s.get("raw_tags", []))
+            domaines = domaines_du_sens(s)
             m = RE_DOMAINE_GLOSE.match(definition)
             if m:
                 domaines.append(m.group(1))
@@ -228,6 +300,13 @@ def wiktionnaire(con: sqlite3.Connection, path: str | Path, progression: Progres
     for eid, mot in synonymes:
         for r in con.execute("SELECT id FROM entree WHERE forme = ? AND langue = ?", (mot, langue)):
             ajouter_relation(con, eid, r["id"], "synonyme", origine="wiktionnaire")
+    # Formes fléchies : rattachées au lemme de même catégorie, à défaut à tout lemme de cette graphie.
+    for forme, lemme, pos in flexions:
+        cibles = con.execute("SELECT id FROM entree WHERE forme = ? AND langue = ? AND pos = ?",
+                             (lemme, langue, pos)).fetchall() or \
+            con.execute("SELECT id FROM entree WHERE forme = ? AND langue = ?", (lemme, langue)).fetchall()
+        for r in cibles:
+            ajouter_formes(con, r["id"], [forme])
     con.commit()
     return n
 
