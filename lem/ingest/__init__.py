@@ -92,12 +92,23 @@ def demo(con: sqlite3.Connection) -> int:
 
 # -- wordfreq --------------------------------------------------------------------------------------
 
-def zipf_wordfreq(con: sqlite3.Connection, ecraser: bool = False) -> int:
-    from wordfreq import zipf_frequency
+# wordfreq estime une locution d'après ses mots, comme s'ils étaient indépendants : « ligne de Hunter » 3,7,
+# « N. S. J. C. » 6,1. On part donc du mot le plus rare et on retire un point de Zipf par mot supplémentaire.
+PENALITE_LOCUTION = 1.0
 
+
+def zipf_estime(forme: str, langue: str = "fr") -> float:
+    from wordfreq import tokenize, zipf_frequency
+
+    mots = tokenize(forme, langue)
+    if len(mots) <= 1:
+        return zipf_frequency(forme, langue)
+    return max(0.0, min(zipf_frequency(m, langue) for m in mots) - PENALITE_LOCUTION * (len(mots) - 1))
+
+
+def zipf_wordfreq(con: sqlite3.Connection, ecraser: bool = False) -> int:
     rows = con.execute("SELECT id, forme FROM entree" + ("" if ecraser else " WHERE zipf IS NULL")).fetchall()
-    con.executemany("UPDATE entree SET zipf = ? WHERE id = ?",
-                    ((zipf_frequency(r["forme"], "fr"), r["id"]) for r in rows))
+    con.executemany("UPDATE entree SET zipf = ? WHERE id = ?", ((zipf_estime(r["forme"]), r["id"]) for r in rows))
     con.commit()
     return len(rows)
 
@@ -275,7 +286,8 @@ def wiktionnaire(con: sqlite3.Connection, path: str | Path, progression: Progres
             domaines = domaines_du_sens(s)
             m = RE_DOMAINE_GLOSE.match(definition)
             if m:
-                domaines.append(m.group(1))
+                if m.group(1).strip().lower() in connus or RE_DISCIPLINE.match(m.group(1).strip().lower()):
+                    domaines.append(m.group(1))
                 definition = definition[m.end():]
             if not definition.strip():
                 continue

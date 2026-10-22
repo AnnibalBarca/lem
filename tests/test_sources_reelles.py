@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from lem import ingest
 from lem.db import connect
 
@@ -56,3 +58,10 @@ def test_wiktionnaire_reel():
     assert _entree(con, "ONU", "nom_propre")["type"] == "sigle"
     thur = _entree(con, "thuriféraire")
     assert con.execute("SELECT COUNT(*) FROM sens WHERE entree_id = ?", (thur["id"],)).fetchone()[0] == 3
+
+
+def test_zipf_locutions():
+    # une locution n'est pas plus fréquente que son mot le plus rare
+    assert ingest.zipf_estime("ligne de Hunter") < ingest.zipf_estime("Hunter")
+    assert ingest.zipf_estime("pomme de terre") > ingest.zipf_estime("casser sa pipe")
+    assert ingest.zipf_estime("thuriféraire") == pytest.approx(1.57, abs=0.3)
