@@ -170,3 +170,19 @@ def test_meme_terminaison_indexee(con):
         f = normaliser(forme)
         attendu = [i for i, x in zip(index.ids, index.formes) if len(f) >= 6 and x.endswith(f[-4:]) and x != f][:30]
         assert index.meme_terminaison(forme) == attendu
+
+
+def test_carte_graphie_repondue(con, carte, rng):
+    """Une faute dans la Bombe crée une trace ortho ; y répondre dans les Cartes ne doit pas planter
+    (sens_id 0 violait la clé étrangère vers sens ; la convention est NULL, comme dans la Bombe)."""
+    from lem.orthographe import diagnostiquer, enregistrer_faute
+
+    diag = diagnostiquer(con, "acronime")
+    assert diag is not None
+    enregistrer_faute(con, None, "bombe", diag)
+    partie = PartieCartes(con, params("cartes", nouveaux=0, exercice="recep"), carte, rng=rng)
+    it = partie._item("graphie", diag.entree_id, 0)          # la carte que la file présenterait une fois due
+    res = partie.repondre(it, it.forme, 2000)
+    partie.valider(res, None)
+    assert res.correct
+    assert con.execute("SELECT COUNT(*) FROM evenement WHERE jeu = 'cartes' AND trace = 'ortho'").fetchone()[0] == 1

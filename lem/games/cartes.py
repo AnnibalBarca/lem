@@ -242,7 +242,7 @@ class PartieCartes:
         if recep and not frappe.dictee:              # fautes d'une dictée = fautes de Whisper
             fautes += recep.fautes
         eid = ecrire(self.con, self.session_id, Evenement(
-            "cartes", "reponse", entree_id=it.entree_id, sens_id=0 if trace == "ortho" else it.sens_id, trace=trace,
+            "cartes", "reponse", entree_id=it.entree_id, sens_id=None if trace == "ortho" else it.sens_id, trace=trace,
             reponse=texte, correct=correct, note_auto=note, latence_ms=latence_ms, frappe=frappe, data=data))
         for d in fautes:
             if it.exercice != "graphie":          # en exercice graphie, la réponse elle-même est la trace ortho
