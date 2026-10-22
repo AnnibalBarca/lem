@@ -407,7 +407,7 @@ class EcranPartie(Screen):
                                 style=BLANC))
 
     def _juge(self, args: list[str]) -> None:
-        """/juge <modèle Ollama> | non — juge local des définitions (réglage global)."""
+        """/juge auto | haiku | sonnet | <modèle Ollama> | non — juge en direct des définitions (réglage global)."""
         from lem.db import set_reglage
         from lem.grading.local import modele_reglage
 
@@ -416,8 +416,13 @@ class EcranPartie(Screen):
             self.ctx.con.commit()
             self.ctx.__dict__.pop("juge", None)        # relu au prochain usage
         m, j = modele_reglage(self.ctx.con), self.ctx.juge
-        etat = "coupé" if not m else f"{m} — " + ("prêt" if j else "absent d'Ollama (ollama pull " + m + ")")
-        self.maj("retour", Text(f"juge local : {etat}", style=BLANC))
+        if not m:
+            etat = "coupé"
+        elif j:
+            etat = f"{m} → {j.correcteur}"
+        else:
+            etat = f"{m} — indisponible (ni `claude` ni le modèle Ollama)"
+        self.maj("retour", Text(f"juge : {etat}", style=BLANC))
 
     def action_quitter(self) -> None:
         self.app.pop_screen()
@@ -647,7 +652,7 @@ class EcranCartes(EcranPartie):
                 t += ligne_proximite(comp.proximite, mot)
         v = getattr(r, "verdict_local", None)
         if v is not None:
-            t.append(f"\njuge ({self.ctx.juge.modele if self.ctx.juge else 'local'}) : ", style=GRIS)
+            t.append(f"\njuge ({self.ctx.juge.modele if self.ctx.juge else '?'}) : ", style=GRIS)
             t.append(f"{v.precision}/5 {PRECISION[v.precision]}", style=f"bold {BLANC}")
             t.append(f" · {v.erreur.value.replace('_', ' ')}", style=GRIS)
             if v.mot_reellement_defini:
@@ -656,7 +661,7 @@ class EcranCartes(EcranPartie):
             if v.commentaire:
                 t.append(f"\n{v.commentaire}", style=GRIS)
         elif getattr(r, "juge_en_cours", False):
-            t.append(f"\n… le juge local lit ta définition", style=SOMBRE)
+            t.append(f"\n… le juge ({self.ctx.juge.modele if self.ctx.juge else ''}) lit ta définition", style=SOMBRE)
         if r.prod and r.prod.comparaison:
             t.append("\n")
             t += ligne_proximite(r.prod.comparaison.proximite, f"« {r.reponse} »")

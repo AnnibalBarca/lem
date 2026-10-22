@@ -9,9 +9,11 @@ On ne peut pas juger un ordonnanceur à l'œil. On fabrique donc :
   * des sessions quotidiennes de durée fixe, jouées par le vrai moteur (PartieCartes), avec une
     horloge simulée.
 
-On mesure ce qui compte : combien de mots INCONNUS au départ sont réellement acquis (sens et forme)
-un mois après la fin, par minute de jeu ; le temps perdu sur des mots déjà connus ; la justesse de
-la carte de connaissance (score de Brier, AUC).
+On mesure ce qui compte, un mois après la fin (sans jouer entre-temps) :
+  * retenus_sens / retenus_forme : l'espérance du nombre de mots, non connus au départ, dont l'élève
+    retrouverait le sens / le mot (Σ R — la mesure des simulateurs FSRS), par heure de jeu ;
+  * acquis_sens / acquis_forme : ceux qu'il retrouverait presque sûrement (R ≥ 0,9 / 0,8) ;
+  * le temps passé sur des mots déjà connus ; la justesse de la carte de connaissance (Brier, AUC).
 
 Les paramètres de l'élève ne sont PAS ceux de FSRS : le moteur doit s'adapter à un élève qu'il ne
 connaît pas. Les chiffres absolus dépendent du modèle d'élève ; ce sont les écarts entre moteurs,
@@ -30,7 +32,8 @@ from datetime import datetime, timedelta, timezone
 
 import numpy as np
 
-from lem.db import ajouter_formes, ajouter_relation, connect, domaine_id, morpheme_id, regler_horloge, upsert_entree
+from lem.db import (ajouter_formes, ajouter_relation, connect, domaine_id, morpheme_id, regler_horloge, set_reglage,
+                    upsert_entree)
 
 JOUR = 86400.0
 
@@ -217,6 +220,10 @@ class Resultats:
     acquis_forme: int
     acquis_sens_par_heure: float
     acquis_forme_par_heure: float
+    retenus_sens: float
+    retenus_forme: float
+    retenus_sens_par_heure: float
+    retenus_forme_par_heure: float
     minutes_sur_connus: float
     brier_carte: float
     auc_carte: float
@@ -236,7 +243,8 @@ def _auc(scores: list[float], verites: list[bool]) -> float:
 
 def simuler(moteur_params: dict | None = None, *, jours: int = 30, minutes: float = 15.0, n_mots: int = 3000,
             graine: int = 0, delai_eval: int = 30, chemin: str = ":memory:", nom: str = "moteur",
-            params_eleve: ParamsEleve | str | None = None, journal=None) -> Resultats:
+            params_eleve: ParamsEleve | str | None = None, reglages: dict | None = None,
+            optimiser_chaque: int = 0, journal=None) -> Resultats:
     """Joue `jours` sessions de `minutes` minutes avec le vrai moteur de Cartes, puis évalue."""
     from lem.games import REGISTRE
     from lem.games.cartes import PartieCartes
@@ -248,11 +256,16 @@ def simuler(moteur_params: dict | None = None, *, jours: int = 30, minutes: floa
     con = connect(chemin)
     ids = lexique_synthetique(con, n_mots, graine)
     calibrer(con, ParamsPrior(cible_connus=0.35 * n_mots))
+    for cle, valeur in (reglages or {}).items():          # ex. {"fsrs": {"retention": 0.85}}
+        set_reglage(con, cle, valeur)
     t0 = datetime(2026, 1, 1, 8, 0, tzinfo=timezone.utc)
     horloge = {"t": 0.0}
     regler_horloge(lambda: t0 + timedelta(seconds=horloge["t"]))
     try:
         eleve = Eleve(con, ids, params_eleve, graine)
+        t_eval0 = (jours - 1) * JOUR + delai_eval * JOUR
+        avant_s = {e: eleve.R(e, "sens", t_eval0) for e in ids}
+        avant_f = {e: eleve.R(e, "forme", t_eval0) for e in ids}
         params = {**REGISTRE["cartes"].defauts(), **(moteur_params or {})}
         rng = random.Random(graine + 7)
         cartes = 0
@@ -296,12 +309,24 @@ def simuler(moteur_params: dict | None = None, *, jours: int = 30, minutes: floa
                 if eleve.etat0.get(e) == "connu":
                     sur_connus += duree
             carte.recalculer_tout()
+            if optimiser_chaque and (j + 1) % optimiser_chaque == 0:
+                from lem.memory.optimiseur import optimiser
+
+                raps = optimiser(con)
+                if journal:
+                    journal(f"{nom} · optimiseur : " + " · ".join(
+                        f"{t} {r.n_revisions} rév. {'adopté' if r.adopte else 'gardé'} ({r.validation_avant} → {r.validation_apres})"
+                        for t, r in raps.items()))
             if journal:
                 journal(f"{nom} · jour {j + 1}/{jours} · {cartes} cartes · {len(vus)} mots vus")
         t_eval = (jours - 1) * JOUR + delai_eval * JOUR
         non_connus = [e for e in ids if eleve.etat0[e] != "connu"]
         acq_s = sum(eleve.R(e, "sens", t_eval) >= 0.9 for e in non_connus)
         acq_f = sum(eleve.R(e, "forme", t_eval) >= 0.8 for e in non_connus)
+        # Ce que l'élève aurait retenu sans jouer : les mots flous oublient aussi ; on soustrait leur R initial
+        # projeté à t_eval pour ne compter que l'apport du jeu.
+        ret_s = sum(eleve.R(e, "sens", t_eval) - avant_s.get(e, 0.0) for e in non_connus)
+        ret_f = sum(eleve.R(e, "forme", t_eval) - avant_f.get(e, 0.0) for e in non_connus)
         # Base de comparaison : ce que l'élève aurait su de toute façon (mots flous qui tiennent encore).
         base_s = sum(eleve.R(e, "sens", t_eval) >= 0.9 for e in non_connus if (e, "sens") in eleve.mem and e not in vus)
         t_fin = jours * JOUR
@@ -312,7 +337,8 @@ def simuler(moteur_params: dict | None = None, *, jours: int = 30, minutes: floa
         heures = max(jeu_total / 3600, 1e-9)
         return Resultats(
             nom, jours, round(jeu_total / 60, 1), cartes, len(vus), acq_s, acq_f,
-            round(acq_s / heures, 1), round(acq_f / heures, 1), round(sur_connus / 60, 1),
+            round(acq_s / heures, 1), round(acq_f / heures, 1), round(ret_s, 1), round(ret_f, 1),
+            round(ret_s / heures, 2), round(ret_f / heures, 2), round(sur_connus / 60, 1),
             round(brier, 4), round(_auc(scores, verite), 4), round(time.monotonic() - debut_calcul, 1),
             {"etats_depart": {k: sum(v == k for v in eleve.etat0.values()) for k in ("connu", "flou", "inconnu")},
              "acquis_sans_jouer": base_s, "params": params},

@@ -46,12 +46,10 @@ class Contexte:
 
     @cached_property
     def juge(self):
-        """Juge local (LLM via Ollama) si un modèle est réglé et disponible, sinon None."""
-        from lem.grading.local import JugeLocal, modele_reglage
+        """Juge en direct des définitions (Claude Haiku ou modèle Ollama, cf. `/juge`), ou None."""
+        from lem.grading.local import juge_depuis_reglage
 
-        m = modele_reglage(self.con)
-        j = JugeLocal(m) if m else None
-        return j if j and j.disponible() else None
+        return juge_depuis_reglage(self.con)
 
     @cached_property
     def carte(self) -> CarteConnaissance:

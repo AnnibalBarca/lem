@@ -40,11 +40,38 @@ SCHEMA = {
 
 
 def modele_reglage(con: sqlite3.Connection) -> str | None:
-    """Le modèle choisi (`/juge`), None si le juge local est coupé."""
+    """Le juge choisi (`/juge`) : « auto » par défaut, un modèle Ollama, « haiku »/« sonnet » (Claude), None si coupé."""
     from lem.db import get_reglage
 
-    m = get_reglage(con, "juge_local", MODELE_DEFAUT)
+    m = get_reglage(con, "juge_local", "auto")
     return None if not m or m == "non" else m
+
+
+MODELES_CLAUDE = ("haiku", "sonnet", "opus")
+
+
+def juge_depuis_reglage(con: sqlite3.Connection):
+    """Le juge en direct à utiliser, ou None.
+
+    auto  : le modèle local par défaut s'il est déjà dans Ollama (PC avec GPU), sinon Claude Haiku si la
+            commande `claude` existe (Mac : rien de plus en mémoire, l'abonnement fait le travail).
+    haiku | sonnet | opus | claude:<modèle> : Claude Code headless.
+    autre : un modèle Ollama (qwen3:8b…)."""
+    from lem.grading.claude_headless import JugeClaude
+
+    m = modele_reglage(con)
+    if m is None:
+        return None
+    if m == "auto":
+        for j in (JugeLocal(MODELE_DEFAUT), JugeClaude("haiku")):
+            if j.disponible():
+                return j
+        return None
+    if m.startswith("claude:") or m in MODELES_CLAUDE:
+        j = JugeClaude(m.split(":", 1)[-1])
+    else:
+        j = JugeLocal(m)
+    return j if j.disponible() else None
 
 
 class JugeLocal:

@@ -199,3 +199,37 @@ def noter(con: sqlite3.Connection, modele: str = "sonnet", limite: int = 500,
     if touches:
         scheduler.reconstruire(con, sorted(touches))
     return total
+
+
+class JugeClaude:
+    """Juge en direct par Claude Code headless (Haiku par défaut), sur l'abonnement : même interface que
+    JugeLocal. Rien à charger en mémoire sur le Mac ; le verdict arrive quelques secondes après la réponse,
+    pendant que l'écran reste libre. Chaque appel lance `claude -p` avec une seule définition."""
+
+    def __init__(self, modele: str = "haiku", appel: Callable[[str, str], str] | None = None):
+        self.modele = modele
+        self.appel = appel or appeler_claude
+        self.derniere_latence = None
+
+    @property
+    def correcteur(self) -> str:
+        return f"claude:{self.modele}"
+
+    def disponible(self) -> bool:
+        import shutil
+
+        cmd = shlex.split(os.environ.get("LEM_CLAUDE_CMD", "claude"))
+        return bool(cmd) and shutil.which(cmd[0]) is not None
+
+    def juger(self, el: Element) -> Verdict:
+        import time
+
+        t = time.monotonic()
+        brut = extraire_json(self.appel(construire_prompt([el]), self.modele))
+        obj = next((o for o in brut if isinstance(o, dict) and o.get("id") == el.evenement_id), brut[0] if brut else None)
+        if obj is None:
+            raise ValueError("verdict vide")
+        v = Verdict.model_validate({**obj, "id": el.evenement_id})
+        self.derniere_latence = time.monotonic() - t
+        return v
+

@@ -54,7 +54,7 @@ def test_aucune_variante_dans_la_bombe(con, carte, rng):
     b.invite.suite = "rif"
     r = b.repondre("turiféraire", 900)
     assert not r.valide and r.graphie and r.graphie.correcte == "thuriféraire"
-    assert scheduler.dues(con, now() + timedelta(minutes=5), traces=("ortho",))   # la faute revient
+    assert scheduler.dues(con, now() + timedelta(days=1), traces=("ortho",))      # la faute revient (sous un jour)
     assert b.repondre("thuriféraire", 900).valide
 
 

@@ -52,3 +52,35 @@ def test_juge_local_coupe(con):
 
     set_reglage(con, "juge_local", "non")
     assert local.modele_reglage(con) is None
+
+
+def test_juge_claude_haiku_en_direct(con, monkeypatch):
+    """Sur le Mac : Claude Haiku en headless, même interface et même priorité (claude > local)."""
+    from lem.db import set_reglage
+    from lem.grading.claude_headless import JugeClaude
+    from lem.grading.local import juge_depuis_reglage
+
+    a = eid(con, "thuriféraire")
+    ev = ecrire(con, None, Evenement("cartes", "reponse", entree_id=a, trace="recep", reponse="morne, triste",
+                                     note_auto=3))
+    vu = {}
+
+    def appel(prompt, modele):
+        vu["modele"], vu["prompt"] = modele, prompt
+        return json.dumps({"result": json.dumps([{"id": ev, "precision": 1, "erreur": "confusion_formelle",
+                                                  "mot_reellement_defini": "atrabilaire", "confiance": 0.9}])})
+
+    juge = JugeClaude("haiku", appel=appel)
+    el = element(con, ev)
+    v = juge.juger(el)
+    assert vu["modele"] == "haiku" and "morne" in vu["prompt"] and v.precision == 1
+    appliquer(con, [el], [v], juge.correcteur)
+    assert juge.correcteur == "claude:haiku" and scheduler.note_finale(con, ev, 3) == 1
+
+    monkeypatch.setattr(JugeClaude, "disponible", lambda self: True)
+    monkeypatch.setattr(local.JugeLocal, "disponible", lambda self: False)
+    assert isinstance(juge_depuis_reglage(con), JugeClaude)                    # auto, sans Ollama : Haiku
+    set_reglage(con, "juge_local", "sonnet")
+    assert juge_depuis_reglage(con).modele == "sonnet"
+    set_reglage(con, "juge_local", "qwen3:8b")
+    assert juge_depuis_reglage(con) is None                                     # modèle Ollama absent

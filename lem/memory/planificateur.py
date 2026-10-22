@@ -18,7 +18,8 @@ Règles, dans l'ordre :
      ne dépasse pas EN_COURS_MAX (on consolide avant d'ouvrir) ;
   3. jamais deux cartes du même mot à moins de ECART_SOEURS cartes d'intervalle (sauf reprise de graphie),
      pour qu'une carte ne souffle pas la réponse de sa sœur ;
-  4. s'il ne reste que des cartes en attente pas encore mûres, la plus proche passe en avance.
+  4. s'il ne reste que des cartes en attente pas encore mûres, la plus proche passe en avance ; s'il ne
+     reste que des sœurs trop proches, la moins récente passe quand même.
 
 Le planificateur ne touche pas à la base : PartieCartes lui fournit les réservoirs et lui rapporte les
 réponses ; il est testable seul.
@@ -31,12 +32,15 @@ from dataclasses import dataclass, field
 
 ECART_SOEURS = 4         # cartes minimum entre deux cartes du même mot
 ECART_DUEL = 3           # le duel d'un mot découvert, au plus tôt 3 cartes après
-ECART_PROD = 6           # « sens → mot » d'un mot découvert : au plus tôt 6 cartes et 2 minutes après
-DELAI_PROD = 120.0
+ECART_PROD = 10          # « sens → mot » d'un mot découvert : au plus tôt 10 cartes et 5 minutes après
+DELAI_PROD = 300.0
 HORIZON = 30 * 60.0      # une échéance FSRS à moins de 30 min revient dans la session
 EN_COURS_MAX = 5         # mots en apprentissage ouverts en même temps
 RETOURS_MAX = 3          # une même carte revient au plus 3 fois dans une session ; au-delà, à la suivante
 SONDES_PAR_MOT = 4       # au plus 4 sondes par mot de budget (si tout est connu, on n'insiste pas)
+SECONDES_PAR_CARTE = 10.0  # pour traduire la durée visée en nombre de cartes
+COUT_MOT = 6.0           # cartes qu'un mot appris coûte sa première semaine (sonde, retours, duel, sens → mot)
+EXPLORATION = 3.0        # poids de l'information qu'apporte une sonde dans le choix des mots nouveaux
 
 
 @dataclass
@@ -117,6 +121,11 @@ class Planificateur:
             if e is not None:
                 self.sondes += 1
                 return self._noter(Tache(self.directions[0], e, role="sonde", nouveau=True))
+        # 4. Il ne reste que des cartes sœurs de mots vus à l'instant : la moins récente passe quand même
+        #    (mieux qu'une session qui s'arrête avec des révisions dues).
+        if self.revisions:
+            x = min(self.revisions, key=lambda x: self.dernier.get(x.entree_id, -1))
+            return self._prendre(x, self.revisions)
         return None
 
     def _cadence(self) -> int:

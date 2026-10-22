@@ -39,6 +39,7 @@ from lem.grading.direct import VerdictProd, VerdictRecep, noter_prod, noter_rece
 from lem.journal import Evenement, Frappe, ajouter_notation, ecrire, nettoyer_saisie
 from lem.memory import scheduler
 from lem.memory.knowledge import Y_PAR_NOTE, CarteConnaissance, score_apprentissage
+from lem.memory import planificateur as plan_mod
 from lem.memory.planificateur import Planificateur, Tache
 from lem.orthographe import Diagnostic, accents_manquants, accents_tolerants, diagnostiquer, enregistrer_faute
 
@@ -171,10 +172,20 @@ class PartieCartes:
                                    role, r=t.retrievabilite))
         revisions = _espacer_soeurs(revisions)
 
+        # Mots ouverts lors d'une session précédente (sonde ratée) dont la carte « sens → mot » n'a pas eu le
+        # temps de venir : elle ouvre la session suivante, au lieu d'être perdue.
+        if "prod" in traces and intention != "consolider":
+            for (e, s_id) in self.con.execute(
+                    """SELECT t.entree_id, t.sens_id FROM trace_etat t WHERE t.trace = 'recep' AND t.statut IS NULL
+                       AND NOT EXISTS (SELECT 1 FROM trace_etat u WHERE u.entree_id = t.entree_id AND u.trace = 'prod')
+                       ORDER BY t.maj LIMIT ?""", (p["revisions_max"],)):
+                if e not in self._hors_jeu and (ids is None or e in ids):
+                    revisions.append(Tache("prod", e, s_id, "apprentissage", nouveau=True, r=0.5))
+
         # Budget de mots nouveaux : la capacité de la session moins la charge de révisions à venir.
-        capacite = p.get("minutes", 15) * 60 / 10.0           # ≈ 10 s par carte
+        capacite = p.get("minutes", 15) * 60 / plan_mod.SECONDES_PAR_CARTE
         charge = scheduler.charge(self.con, 7)
-        budget = max(0, min(p["nouveaux"], round((capacite - charge) / 6.0)))   # ≈ 6 cartes la 1re semaine
+        budget = max(0, min(p["nouveaux"], round((capacite - charge) / plan_mod.COUT_MOT)))
         if intention == "decouvrir":
             budget = p["nouveaux"]
         elif intention in ("consolider", "graphie"):
@@ -204,7 +215,8 @@ class PartieCartes:
 
         def valeur(r):
             interet = max((interets.get(d, 1.0) for d in dom.get(r["id"], ())), default=1.0)
-            v = score_apprentissage(p_c[r["id"]], r["zipf"], interet, levier.get(r["id"], 0), exploration=0.5)
+            v = score_apprentissage(p_c[r["id"]], r["zipf"], interet, levier.get(r["id"], 0),
+                                    exploration=plan_mod.EXPLORATION)
             return v * (1 + 0.5 * reveles.get(r["id"], 0))
 
         cands.sort(key=valeur, reverse=True)

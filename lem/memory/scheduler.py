@@ -35,12 +35,35 @@ from lem.journal import rang_correcteur
 TRACES = ("recep", "prod", "ortho")
 
 
-def ordonnanceur(con: sqlite3.Connection) -> Scheduler:
-    cfg = get_reglage(con, "fsrs", {})
+def ordonnanceur(con: sqlite3.Connection, trace: str | None = None) -> Scheduler:
+    """Le Scheduler FSRS d'une trace. Les paramètres peuvent être propres à chaque trace (« par_trace »,
+    ajustés par lem optimiser) : retrouver un mot n'est pas reconnaître un sens, et l'un oublie plus vite."""
+    cfg = get_reglage(con, "fsrs", {}) or {}
     kwargs = {"enable_fuzzing": False, "desired_retention": cfg.get("retention", 0.9)}
-    if cfg.get("parametres"):
-        kwargs["parameters"] = tuple(cfg["parametres"])
+    # Étapes d'apprentissage (s) : retours FSRS dans la session d'une carte nouvelle ou oubliée. Aucune par
+    # défaut : au banc d'essai (lem/simulation.py), ces retours à 1 et 10 min réussissent à 99 % mais coûtent
+    # un tiers des cartes et font surestimer la mémoire à FSRS ; une récupération réussie de chaque côté
+    # dans la session (duel, puis sens → mot), puis l'espacement d'une session à l'autre, rendent 24 à 100 %
+    # de mots retenus en plus. Réglage « etapes » / « etapes_reapprentissage » pour les rétablir.
+    kwargs["learning_steps"] = tuple(timedelta(seconds=x) for x in cfg.get("etapes", ()))
+    kwargs["relearning_steps"] = tuple(timedelta(seconds=x) for x in cfg.get("etapes_reapprentissage", ()))
+    params = (cfg.get("par_trace") or {}).get(trace) if trace else None
+    params = params or cfg.get("parametres")
+    if params:
+        kwargs["parameters"] = tuple(params)
     return Scheduler(**kwargs)
+
+
+class _Ordonnanceurs(dict):
+    """Un Scheduler par trace, construit à la demande (rejeu et listes de révisions)."""
+
+    def __init__(self, con: sqlite3.Connection):
+        super().__init__()
+        self.con = con
+
+    def __missing__(self, trace: str) -> Scheduler:
+        s = self[trace] = ordonnanceur(self.con, trace)
+        return s
 
 
 def _card_id(entree_id: int, sens_id: int, trace: str) -> int:
@@ -107,7 +130,7 @@ def _sauver(con: sqlite3.Connection, entree_id: int, sens_id: int, trace: str, c
 
 def reconstruire(con: sqlite3.Connection, entree_ids: list[int] | None = None) -> int:
     """Rejoue le journal pour (re)construire trace_etat. Renvoie le nombre de traces."""
-    sched = ordonnanceur(con)
+    scheds = _Ordonnanceurs(con)
     filtre, args = "", []
     if entree_ids:
         filtre = f"AND entree_id IN ({', '.join('?' * len(entree_ids))})"
@@ -130,6 +153,7 @@ def reconstruire(con: sqlite3.Connection, entree_ids: list[int] | None = None) -
         if note is None:
             continue
         cle = (r["entree_id"], r["sens_id"], r["trace"])
+        sched = scheds[r["trace"]]
         quand = parse_iso(r["ts"])
         card, reps, lapses, statut = etats.get(cle) or (carte_neuve(*cle, quand), 0, 0, None)
         role = data.get("role")
@@ -166,7 +190,7 @@ def dues(con: sqlite3.Connection, quand: datetime | None = None, limite: int = 2
          traces: tuple[str, ...] = TRACES, entree_ids: set[int] | None = None) -> list[TraceDue]:
     """Traces à réviser, les plus fragiles (R la plus basse) d'abord."""
     quand = quand or now()
-    sched = ordonnanceur(con)
+    scheds = _Ordonnanceurs(con)
     rows = con.execute(
         f"""SELECT entree_id, sens_id, trace, card_json, due, statut FROM trace_etat
             WHERE due <= ? AND trace IN ({', '.join('?' * len(traces))})""",
@@ -178,7 +202,7 @@ def dues(con: sqlite3.Connection, quand: datetime | None = None, limite: int = 2
             continue
         card = Card.from_json(r["card_json"])
         out.append(TraceDue(r["entree_id"], r["sens_id"], r["trace"], parse_iso(r["due"]),
-                            sched.get_card_retrievability(card, quand), r["statut"]))
+                            scheds[r["trace"]].get_card_retrievability(card, quand), r["statut"]))
     out.sort(key=lambda t: t.retrievabilite)
     return out[:limite]
 
@@ -206,4 +230,4 @@ def retrievabilite(con: sqlite3.Connection, entree_id: int, sens_id: int, trace:
     ).fetchone()
     if not row:
         return None
-    return ordonnanceur(con).get_card_retrievability(Card.from_json(row["card_json"]), quand or now())
+    return ordonnanceur(con, trace).get_card_retrievability(Card.from_json(row["card_json"]), quand or now())
