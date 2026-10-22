@@ -9,6 +9,7 @@ Ordre de grandeur sur un Mac M4 (16 Go) :
 from __future__ import annotations
 
 import hashlib
+import os
 import sqlite3
 from dataclasses import dataclass
 from typing import Protocol, Sequence
@@ -31,14 +32,26 @@ def _normaliser(m: np.ndarray) -> np.ndarray:
     return (m / n).astype(np.float32)
 
 
+def url_ollama() -> str:
+    """OLLAMA_HOST (même variable que le client ollama), sinon localhost.
+
+    Sous WSL2 avec Ollama installé côté Windows : soit le mode réseau « mirrored »
+    (localhost marche), soit OLLAMA_HOST=http://<IP de l'hôte Windows>:11434.
+    """
+    hote = os.environ.get("OLLAMA_HOST", "").strip() or "localhost:11434"
+    if hote.startswith("0.0.0.0"):
+        hote = hote.replace("0.0.0.0", "localhost", 1)
+    return hote if "://" in hote else f"http://{hote}"
+
+
 class OllamaEmbedder:
-    """bge-m3 servi localement par Ollama (`ollama pull bge-m3`)."""
+    """bge-m3 servi par Ollama (`ollama pull bge-m3`)."""
 
     semantique = True
 
-    def __init__(self, modele: str = MODELE_DEFAUT, url: str = "http://localhost:11434"):
+    def __init__(self, modele: str = MODELE_DEFAUT, url: str | None = None):
         self.nom = modele
-        self.url = url.rstrip("/")
+        self.url = (url or url_ollama()).rstrip("/")
 
     def embed(self, textes: Sequence[str]) -> np.ndarray:
         import httpx

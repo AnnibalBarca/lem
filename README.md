@@ -64,7 +64,9 @@ ollama pull bge-m3 && lem index && lem calibrer
 lem
 ```
 
-Pour faire tout ça par un Claude Code local, utilise le prompt de [docs/claude-local.md](docs/claude-local.md).
+Pour faire tout ça par un Claude Code local : [docs/claude-local.md](docs/claude-local.md) (macOS) ou
+[docs/claude-local-wsl.md](docs/claude-local-wsl.md) (Windows + WSL2). Sous WSL2, si Ollama tourne côté
+Windows, `OLLAMA_HOST` indique à lem où le trouver.
 
 Pour noter les définitions avec ton abonnement Claude, en fin de session : menu « Noter avec Claude »,
 ou `lem noter --modele sonnet` (ou `haiku` pour les grosses fournées). La commande `claude` (Claude

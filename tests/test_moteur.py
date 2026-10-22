@@ -162,3 +162,16 @@ def test_calibrage_des_seuils(con, emb, magasins):
     assert get_reglage(con, "seuils_proximite")["sens"] == r["proximite"]["sens"]
     d = get_reglage(con, f"seuils_definition:{emb.nom}")
     assert d["haut"] > d["bas"]
+
+
+@pytest.mark.parametrize("valeur,attendu", [
+    ("", "http://localhost:11434"),
+    ("0.0.0.0:11434", "http://localhost:11434"),
+    ("172.22.0.1:11434", "http://172.22.0.1:11434"),
+    ("http://hote:8080", "http://hote:8080"),
+])
+def test_url_ollama(monkeypatch, valeur, attendu):
+    from lem.vecteurs import url_ollama
+
+    monkeypatch.setenv("OLLAMA_HOST", valeur)
+    assert url_ollama() == attendu
