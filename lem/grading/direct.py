@@ -134,8 +134,12 @@ def noter_recep(con: sqlite3.Connection, entree_id: int, reponse: str, embedder=
     sens_vise, sim_c = max(sims_cible.items(), key=lambda kv: kv[1]) if sims_cible else (None, 0.0)
 
     # Dictionnaire inversé : quel sens du lexique entier ta définition décrit-elle le mieux ?
+    # Seulement si elle manque la cible : sur un vrai lexique (300 k sens), un sens voisin dépasse presque
+    # toujours la cible de quelques centièmes, même pour une bonne définition (« flatteur, flagorneur »
+    # pour thuriféraire : 82°, mais « flagorneur » est plus proche encore).
     mot_reel = None
-    for vo in magasin_sens.voisins(v, k=5, exclure=set(sens_cible)):
+    t = temperature(sim_c, s["bas"], s["haut"])
+    for vo in (magasin_sens.voisins(v, k=5, exclure=set(sens_cible)) if t < 45 else []):
         if vo.sim > sim_c + s["marge"]:
             r = con.execute(
                 "SELECT e.id, e.forme FROM sens s JOIN entree e ON e.id = s.entree_id WHERE s.id = ?", (vo.id,)
@@ -144,7 +148,6 @@ def noter_recep(con: sqlite3.Connection, entree_id: int, reponse: str, embedder=
                 mot_reel = (r["id"], r["forme"])
         break
 
-    t = temperature(sim_c, s["bas"], s["haut"])
     if mot_reel:
         note = 1
     elif syns_reconnus or t >= 70:
