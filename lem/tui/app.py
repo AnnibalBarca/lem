@@ -23,6 +23,7 @@ from textual.widgets.option_list import Option
 from lem.contexte import Contexte
 from lem.games import REGISTRE
 from lem.games.base import Jeu, executer_commande
+from lem.grading.taxonomie import PRECISION
 from lem.journal import Frappe, fermer_session, ouvrir_session
 from lem.orthographe import GRAPHIE, Diagnostic, surligner
 from lem.similarite import MESSAGES, Proximite
@@ -374,6 +375,10 @@ class EcranPartie(Screen):
             self._accents(texte.strip("/ ").split()[1:])
             self.query_one("#saisie", Input).value = ""
             return True
+        if texte.strip("/ ").lower().split()[:1] == ["juge"]:
+            self._juge(texte.strip("/ ").split()[1:])
+            self.query_one("#saisie", Input).value = ""
+            return True
         res = executer_commande(self.jeu, self.params, texte)
         style = BLANC if res.ok else PROXIMITES[Proximite.JUMEAU]
         self.maj("retour", Text(res.message, style=style))
@@ -400,6 +405,19 @@ class EcranPartie(Screen):
         etat = accents_tolerants(self.ctx.con)
         self.maj("retour", Text("accents manquants : " + ("tolérés (pas une faute)" if etat else "comptés comme fautes"),
                                 style=BLANC))
+
+    def _juge(self, args: list[str]) -> None:
+        """/juge <modèle Ollama> | non — juge local des définitions (réglage global)."""
+        from lem.db import set_reglage
+        from lem.grading.local import modele_reglage
+
+        if args:
+            set_reglage(self.ctx.con, "juge_local", args[0])
+            self.ctx.con.commit()
+            self.ctx.__dict__.pop("juge", None)        # relu au prochain usage
+        m, j = modele_reglage(self.ctx.con), self.ctx.juge
+        etat = "coupé" if not m else f"{m} — " + ("prêt" if j else "absent d'Ollama (ollama pull " + m + ")")
+        self.maj("retour", Text(f"juge local : {etat}", style=BLANC))
 
     def action_quitter(self) -> None:
         self.app.pop_screen()
@@ -510,6 +528,8 @@ class EcranCartes(EcranPartie):
             self.recopies = list(dict.fromkeys(d.correcte for d in self.resultat.fautes))
             self._reveler()
             self._demander_recopie()
+            if self.item.exercice == "recep":
+                self._juger(self.resultat)
             if self.resultat.correct and not self.recopies and self.item.exercice in ("prod", "graphie", "discrimination"):
                 self._auto = self.set_timer(self.AVANCE_AUTO, lambda: self._avancer(None))
         elif self.recopies:
@@ -517,6 +537,46 @@ class EcranCartes(EcranPartie):
         else:
             note = int(texte) if texte.strip() in {"1", "2", "3", "4"} and self.item.exercice != "graphie" else None
             self._avancer(note)
+
+    def _juger(self, res) -> None:
+        """Le juge local note la définition en fond ; l'écran reste libre, le verdict arrive ~1 s après."""
+        from lem.grading.claude_headless import element
+
+        juge = self.ctx.juge
+        el = element(self.ctx.con, res.evenement_id) if juge else None
+        if el is None:
+            return
+        res.juge_en_cours = True
+        self._reveler()
+
+        def tache():
+            try:
+                v = juge.juger(el)
+            except Exception as exc:                     # Ollama absent, lent, hors schéma : on garde le cosinus
+                self.app.call_from_thread(self._verdict_local, res, el, None, exc)
+                return
+            self.app.call_from_thread(self._verdict_local, res, el, v, None)
+
+        self.run_worker(tache, thread=True, group="juge")
+
+    def _verdict_local(self, res, el, v, exc) -> None:
+        from lem.grading.claude_headless import appliquer
+        from lem.grading.taxonomie import NOTE_PAR_PRECISION
+        from lem.memory import scheduler
+
+        res.juge_en_cours = False
+        if v is None:
+            if self.resultat is res and self.is_mounted:
+                self._reveler()
+            return
+        appliquer(self.ctx.con, [el], [v], self.ctx.juge.correcteur)
+        self.ctx.con.commit()
+        if self.resultat is not res or not self.is_mounted:  # carte déjà passée : on rejoue FSRS pour ce mot
+            scheduler.reconstruire(self.ctx.con, [el.entree_id])
+            return
+        res.note_proposee = NOTE_PAR_PRECISION[v.precision]  # Entrée = la note du juge
+        res.verdict_local = v
+        self._reveler()
 
     def _avancer(self, note: int | None) -> None:
         """Clôt la carte et passe à la suivante (une seule fois, qu'on ait tapé Entrée ou attendu)."""
@@ -577,7 +637,7 @@ class EcranCartes(EcranPartie):
         if r.recep:
             t.append("   ")
             t += thermometre(r.recep.temperature)
-            if r.recep.mot_reellement_defini:
+            if r.recep.mot_reellement_defini and getattr(r, "verdict_local", None) is None:
                 t.append("\n")
                 t += ligne_proximite(Proximite.SENS, f"tu as plutôt défini « {r.recep.mot_reellement_defini[1]} »")
             if r.recep.synonymes_reconnus:
@@ -585,6 +645,18 @@ class EcranCartes(EcranPartie):
             for mot, comp in r.recep.confusions:
                 t.append("\n")
                 t += ligne_proximite(comp.proximite, mot)
+        v = getattr(r, "verdict_local", None)
+        if v is not None:
+            t.append(f"\njuge ({self.ctx.juge.modele if self.ctx.juge else 'local'}) : ", style=GRIS)
+            t.append(f"{v.precision}/5 {PRECISION[v.precision]}", style=f"bold {BLANC}")
+            t.append(f" · {v.erreur.value.replace('_', ' ')}", style=GRIS)
+            if v.mot_reellement_defini:
+                t.append("\n")
+                t += ligne_proximite(Proximite.SENS, f"tu as plutôt défini « {v.mot_reellement_defini} »")
+            if v.commentaire:
+                t.append(f"\n{v.commentaire}", style=GRIS)
+        elif getattr(r, "juge_en_cours", False):
+            t.append(f"\n… le juge local lit ta définition", style=SOMBRE)
         if r.prod and r.prod.comparaison:
             t.append("\n")
             t += ligne_proximite(r.prod.comparaison.proximite, f"« {r.reponse} »")

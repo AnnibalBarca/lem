@@ -76,19 +76,14 @@ def a_noter(con: sqlite3.Connection, limite: int = 500) -> list[Element]:
     return out
 
 
-def construire_prompt(lot: list[Element]) -> str:
+def consignes() -> str:
+    """Les consignes et le vocabulaire fermé, communs à Claude, au juge local et (demain) à Jev."""
     erreurs = "\n".join(f'  - "{e.value}" : {DESCRIPTION_ERREUR[e]}' for e in Erreur)
     precision = "\n".join(f"  {k} = {v}" for k, v in PRECISION.items())
-    items = "\n".join(json.dumps(e.payload, ensure_ascii=False) for e in lot)
-    return f"""Tu es correcteur lexicographique. Pour chaque élément, un apprenant francophone natif a vu un MOT
-et a écrit ce qu'il croit être son sens (texte libre ou liste de synonymes). Juge sa réponse par rapport
-aux sens de référence. Les « voisins » sont des mots qu'on confond souvent avec la cible : sers-t'en pour
-détecter qu'il a décrit un autre mot.
-
-Réponds UNIQUEMENT par un tableau JSON, un objet par élément, sans texte autour :
-[{{"id": <id>, "sens_vise_id": <id du sens de référence visé ou null>, "precision": <1-5>,
-   "erreur": <une valeur ci-dessous>, "mot_reellement_defini": <mot qu'il a en fait défini, ou null>,
-   "confiance": <0-1>, "commentaire": <15 mots max, en français>}}]
+    return f"""Tu es correcteur lexicographique. Un apprenant francophone natif a vu un MOT et a écrit ce qu'il croit
+être son sens (texte libre ou liste de synonymes). Juge sa réponse par rapport aux sens de référence. Les
+« voisins » sont des mots qu'on confond souvent avec la cible : sers-t'en pour détecter qu'il a décrit un
+autre mot.
 
 Échelle de précision :
 {precision}
@@ -96,12 +91,40 @@ Réponds UNIQUEMENT par un tableau JSON, un objet par élément, sans texte auto
 Valeurs autorisées pour "erreur" :
 {erreurs}
 
-Règles : une liste de synonymes justes vaut précision 4 ; un autre sens réel du mot = "autre_sens" ;
-ne sois pas indulgent sur les définitions vagues : la précision 2 existe pour elles.
+Règles :
+- une liste de synonymes justes vaut précision 4 ; un autre sens réel du mot = "autre_sens" ;
+- ne sois pas indulgent sur les définitions vagues : la précision 2 existe pour elles ;
+- une réponse qui décrit un AUTRE mot ("sens_voisin", "confusion_formelle") ou sans rapport ("contresens")
+  vaut précision 1, sauf si une partie du sens de la cible y est juste ;
+- "mot_reellement_defini" : seulement un AUTRE mot que la cible, que la réponse définit mieux qu'elle ;
+  jamais la cible elle-même, jamais un morceau de définition ; sinon null."""
+
+
+def construire_prompt(lot: list[Element]) -> str:
+    items = "\n".join(json.dumps(e.payload, ensure_ascii=False) for e in lot)
+    return f"""{consignes()}
+
+Réponds UNIQUEMENT par un tableau JSON, un objet par élément, sans texte autour :
+[{{"id": <id>, "sens_vise_id": <id du sens de référence visé ou null>, "precision": <1-5>,
+   "erreur": <une valeur autorisée>, "mot_reellement_defini": <mot qu'il a en fait défini, ou null>,
+   "confiance": <0-1>, "commentaire": <15 mots max, en français>}}]
 
 Éléments (JSON lignes) :
 {items}
 """
+
+
+def element(con: sqlite3.Connection, evenement_id: int) -> Element | None:
+    """L'élément à juger pour une réponse donnée (même forme que pour un lot)."""
+    r = con.execute("""SELECT ev.id, ev.entree_id, ev.reponse, ev.data, e.forme, e.pos FROM evenement ev
+                       JOIN entree e ON e.id = ev.entree_id WHERE ev.id = ?""", (evenement_id,)).fetchone()
+    if r is None or not (r["reponse"] or "").strip():
+        return None
+    sens = [{"id": s["id"], "definition": s["definition"]} for s in con.execute(
+        "SELECT id, definition FROM sens WHERE entree_id = ? AND definition != '' ORDER BY rang", (r["entree_id"],))]
+    return Element(r["id"], r["entree_id"], {
+        "id": r["id"], "mot": r["forme"], "categorie": r["pos"], "sens": sens,
+        "voisins": json.loads(r["data"]).get("voisins", [])[:6], "reponse": r["reponse"]})
 
 
 def extraire_json(texte: str) -> list[dict]:
