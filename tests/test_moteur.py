@@ -246,3 +246,34 @@ def test_revision_d_un_mot_etudie_ne_propage_pas(con, carte):
     assert carte.p(voisin) == pytest.approx(avant)
     carte.observer(a, 1.0, propager=True)
     assert carte.p(voisin) > avant
+
+
+def test_prior_compte_les_graphies_une_fois():
+    """Deux catégories pour une même graphie, ou des composés de fréquence inconnue, ne diluent pas la cible."""
+    from lem.db import connect, upsert_entree
+    from lem.memory.knowledge import ParamsPrior, calibrer
+
+    def seuil(doublons: bool, composes: int) -> float:
+        c = connect(":memory:")
+        for i in range(200):
+            upsert_entree(c, f"mot{i}", "nom", zipf=1 + i * 0.02)
+            if doublons:
+                upsert_entree(c, f"mot{i}", "adj", zipf=1 + i * 0.02)
+        for i in range(composes):
+            upsert_entree(c, f"terme technique {i}", "nom", type="compose", zipf=0.0)
+        return calibrer(c, ParamsPrior(cible_connus=50)).seuil
+
+    base = seuil(False, 0)
+    assert seuil(True, 0) == pytest.approx(base, abs=1e-6)
+    assert seuil(False, 500) == pytest.approx(base, abs=1e-6)
+
+
+def test_prior_ancienne_methode_recalibre_une_fois(con):
+    from lem.db import get_reglage, set_reglage
+    from lem.memory.knowledge import VERSION_PRIOR, mettre_a_jour_prior
+
+    brut = get_reglage(con, "prior")
+    set_reglage(con, "prior", {**brut, "version": 0, "seuil": 9.9})
+    assert mettre_a_jour_prior(con)
+    assert get_reglage(con, "prior")["version"] == VERSION_PRIOR and get_reglage(con, "prior")["seuil"] != 9.9
+    assert not mettre_a_jour_prior(con)

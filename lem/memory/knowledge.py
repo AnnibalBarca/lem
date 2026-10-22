@@ -42,6 +42,24 @@ class ParamsPrior:
     pente: float = 1.6               # logit par unité Zipf
     zipf_absent: float = 0.6         # Zipf attribué aux mots absents des corpus (turiféraire…)
     seuil: float | None = None       # z0, calculé par calibrer()
+    version: int = 0                 # méthode de calibrage (VERSION_PRIOR)
+
+
+VERSION_PRIOR = 2                    # 2 : une graphie compte une fois ; sigles et composés de Zipf nul exclus
+
+
+def mettre_a_jour_prior(con: sqlite3.Connection) -> bool:
+    """Recalibre l'a priori si la base a été calibrée par une méthode plus ancienne (même cible, même pente),
+    puis rejoue la carte. Renvoie True si quelque chose a changé."""
+    brut = get_reglage(con, "prior", None)
+    if not brut or brut.get("version", 0) >= VERSION_PRIOR:
+        return False
+    if not con.execute("SELECT 1 FROM entree LIMIT 1").fetchone():
+        return False
+    garde = {k: v for k, v in brut.items() if k in ("cible_connus", "pente", "zipf_absent")}
+    calibrer(con, ParamsPrior(**garde))
+    CarteConnaissance(con).rejouer()
+    return True
 
 
 def sigmoid(x):
@@ -58,13 +76,14 @@ def bande_zipf(z: float | None) -> str:
     return f"zipf:{min(int(z), 5)}"
 
 
-def calibrer_seuil(zipfs: np.ndarray, cible: float, pente: float) -> float:
-    """Trouve z0 tel que Σ σ(pente·(z − z0)) = cible (bissection, monotone en z0)."""
-    cible = min(cible, len(zipfs) * 0.98)
+def calibrer_seuil(zipfs: np.ndarray, cible: float, pente: float, poids: np.ndarray | None = None) -> float:
+    """Trouve z0 tel que Σ poids·σ(pente·(z − z0)) = cible (bissection, monotone en z0)."""
+    poids = np.ones_like(zipfs) if poids is None else poids
+    cible = min(cible, float(poids.sum()) * 0.98)
     lo, hi = -10.0, 15.0
     for _ in range(80):
         mid = (lo + hi) / 2
-        total = float(sigmoid(pente * (zipfs - mid)).sum())
+        total = float((poids * sigmoid(pente * (zipfs - mid))).sum())
         if total > cible:
             lo = mid
         else:
@@ -75,13 +94,24 @@ def calibrer_seuil(zipfs: np.ndarray, cible: float, pente: float) -> float:
 def calibrer(con: sqlite3.Connection, params: ParamsPrior | None = None) -> ParamsPrior:
     """Calcule le prior « adulte cultivé » et (ré)initialise la table connaissance."""
     params = params or ParamsPrior(**get_reglage(con, "prior", {}))
+    # La cible (≈ 45 000) compte des LEMMES au sens des études de vocabulaire : une graphie compte une fois
+    # même si le dictionnaire la range sous deux catégories (« isotope » nom et adjectif) ; les noms propres
+    # et sigles ne comptent pas ; les composés et locutions de fréquence inconnue (Zipf nul : des milliers de
+    # termes techniques) non plus. Sans cela, la cible se dilue et l'a priori des mots courants s'effondre
+    # (acronyme 0,14 sur la vraie base). Toutes les entrées reçoivent ensuite le prior par la même courbe.
     rows = con.execute(
-        "SELECT id, zipf FROM entree WHERE langue = 'fr' AND type NOT IN ('nom_propre')"
+        "SELECT id, lower(forme) AS f, zipf, type FROM entree WHERE langue = 'fr' AND type NOT IN ('nom_propre', 'sigle')"
     ).fetchall()
+    rows = [r for r in rows if not (r["type"] in ("compose", "expression") and not r["zipf"])]
     if not rows:
         return params
+    n_par_forme: dict[str, int] = defaultdict(int)
+    for r in rows:
+        n_par_forme[r["f"]] += 1
     z = np.array([params.zipf_absent if not r["zipf"] else r["zipf"] for r in rows], dtype=float)
-    params.seuil = calibrer_seuil(z, params.cible_connus, params.pente)
+    w = np.array([1.0 / n_par_forme[r["f"]] for r in rows], dtype=float)
+    params.seuil = calibrer_seuil(z, params.cible_connus, params.pente, w)
+    params.version = VERSION_PRIOR
     set_reglage(con, "prior", asdict(params))
 
     # Les noms propres ne comptent pas dans la cible mais reçoivent un prior par la même courbe.

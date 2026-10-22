@@ -120,9 +120,12 @@ def cmd_calibrer(args) -> None:
 def cmd_prior(args) -> None:
     from lem.memory.knowledge import ParamsPrior, calibrer
 
+    from lem.memory.knowledge import CarteConnaissance
+
     ctx = _ctx(args)
     p = calibrer(ctx.con, ParamsPrior(cible_connus=args.cible, pente=args.pente))
-    print(f"seuil Zipf calibré : {p.seuil:.2f} (≈ {args.cible:.0f} lemmes connus)")
+    CarteConnaissance(ctx.con).rejouer()
+    print(f"seuil Zipf calibré : {p.seuil:.2f} (≈ {args.cible:.0f} lemmes connus) ; carte rejouée.")
 
 
 def cmd_index(args) -> None:

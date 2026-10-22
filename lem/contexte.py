@@ -53,6 +53,9 @@ class Contexte:
 
     @cached_property
     def carte(self) -> CarteConnaissance:
+        from lem.memory.knowledge import mettre_a_jour_prior
+
+        mettre_a_jour_prior(self.con)        # base calibrée par une méthode plus ancienne : recalibrée une fois
         return CarteConnaissance(self.con, self.lexique)
 
     def params(self, jeu) -> dict:
