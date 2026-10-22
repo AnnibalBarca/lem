@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from lem import ingest
@@ -109,3 +110,23 @@ def test_nettoyer_sens_garde_ce_que_le_journal_cite():
     assert ingest.nettoyer_sens(con) == {"nettoyes": 1, "supprimes": 1, "vides_gardes": 1}
     defs = dict(con.execute("SELECT id, definition FROM sens").fetchall())
     assert vide not in defs and defs[cite] == "" and defs[utile] == "Coterie."
+
+
+def test_magasin_compact_sur_fichier(tmp_path, monkeypatch):
+    """Base sur disque : cache créé (empreintes + vecteurs projetés), mêmes voisins que le calcul exact."""
+    from lem import vecteurs
+    from lem.vecteurs import HashEmbedder, Magasin, indexer
+
+    monkeypatch.setattr(vecteurs, "DOSSIER_CACHE", tmp_path / "cache")
+    con = connect(tmp_path / "b.sqlite")
+    ingest.demo(con)
+    emb = HashEmbedder()
+    indexer(con, emb, "sens")
+    m = Magasin(con, "sens", emb.nom)
+    assert list((tmp_path / "cache").rglob("*.bits.npy")) and isinstance(m.m, np.memmap)
+    exact = Magasin(connect(":memory:"), "sens", emb.nom)        # vide : on compare au produit direct
+    v = emb.embed(["mot qui se prononce comme un sigle"])[0]
+    attendu = np.argsort(-(np.asarray(m.m, dtype=np.float32) @ v))[:5]
+    assert [x.id for x in m.voisins(v, k=5)] == [int(m.ids[i]) for i in attendu]
+    m2 = Magasin(con, "sens", emb.nom)                            # second chargement : depuis le cache
+    assert m2.sims(v, [int(m.ids[0])]) == m.sims(v, [int(m.ids[0])]) and not len(exact)

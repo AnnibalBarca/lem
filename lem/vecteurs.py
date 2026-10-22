@@ -13,6 +13,7 @@ import os
 import sqlite3
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol, Sequence
 
 import numpy as np
@@ -157,32 +158,105 @@ class Voisin:
     sim: float
 
 
+DOSSIER_CACHE = Path(os.environ.get("LEM_HOME", Path.home() / ".lem")) / "cache"
+
+
+def _chemin_base(con: sqlite3.Connection) -> str:
+    """Chemin du fichier de la base ('' pour une base en mémoire)."""
+    return next((r[2] for r in con.execute("PRAGMA database_list") if r[1] == "main"), "") or ""
+
+
 class Magasin:
-    """Matrice de vecteurs normalisés pour un type d'objet et un modèle."""
+    """Vecteurs normalisés d'un type d'objet pour un modèle, avec recherche des plus proches voisins.
+
+    Mode compact (défaut) : en RAM, seulement une empreinte d'un bit par dimension (128 octets par vecteur,
+    ≈ 70 Mo pour 530 k vecteurs) ; les vecteurs exacts (float16) restent sur disque, projetés en mémoire
+    (mmap) et lus à la demande. Une requête : distance de Hamming sur toutes les empreintes, puis calcul exact
+    sur les meilleurs candidats. Les fichiers vivent dans ~/.lem/cache/<base>/ et sont refaits si les vecteurs
+    de la base changent. LEM_VECTEURS=float32 garde tout en RAM (≈ 2 Go pour 530 k vecteurs, un peu plus rapide).
+    """
+
+    CANDIDATS = 256        # candidats recalculés exactement après le tri par empreinte
 
     def __init__(self, con: sqlite3.Connection, objet: str, modele: str):
         self.objet, self.modele = objet, modele
-        rows = con.execute(
-            "SELECT objet_id, vecteur FROM embedding WHERE objet = ? AND modele = ? ORDER BY objet_id",
-            (objet, modele),
-        ).fetchall()
-        self.ids = np.array([r[0] for r in rows], dtype=np.int64)
-        self.pos = {int(i): k for k, i in enumerate(self.ids)}
-        # Stockés en float16, gardés en float32 en mémoire : un seul produit matriciel par requête
-        # (300 k sens : ~470 ms par blocs float16 → quelques dizaines de ms ; ≈ 1,2 Go de RAM).
-        # LEM_VECTEURS=float16 garde la moitié de la RAM (machine modeste, téléphone), au prix de la vitesse.
-        dtype = np.float16 if os.environ.get("LEM_VECTEURS", "").lower() == "float16" else np.float32
-        if rows:
-            self.m = np.frombuffer(b"".join(r[1] for r in rows), dtype=np.float16).reshape(len(rows), -1).astype(dtype)
+        n, mn, mx, somme = con.execute(
+            "SELECT COUNT(*), MIN(objet_id), MAX(objet_id), TOTAL(objet_id) FROM embedding WHERE objet = ? AND modele = ?",
+            (objet, modele)).fetchone()
+        self.complet = os.environ.get("LEM_VECTEURS", "").lower() == "float32"
+        base = _chemin_base(con)
+        if n == 0:
+            self.ids, self.m, self.bits = np.zeros(0, np.int64), np.zeros((0, 1), np.float32), np.zeros((0, 1), np.uint64)
+        elif not base:                                   # base en mémoire (tests) : tout en RAM
+            self.ids, m = self._lire(con)
+            self.m, self.bits = m.astype(np.float32), self._empreintes(m)
         else:
-            self.m = np.zeros((0, 1), dtype=dtype)
+            sig = hashlib.blake2b(f"{n}|{mn}|{mx}|{somme}".encode(), digest_size=6).hexdigest()
+            dossier = DOSSIER_CACHE / hashlib.blake2b(os.path.realpath(base).encode(), digest_size=4).hexdigest()
+            racine = dossier / f"{objet}-{modele.replace(':', '_')}-{sig}"
+            if not (racine.with_suffix(".bits.npy")).exists():
+                self._construire(con, racine, n)
+            self.ids = np.load(racine.with_suffix(".ids.npy"))
+            self.bits = np.load(racine.with_suffix(".bits.npy"))
+            m = np.load(racine.with_suffix(".f16.npy"), mmap_mode="r")
+            self.m = np.asarray(m, dtype=np.float32) if self.complet else m
+        self.pos = {int(i): k for k, i in enumerate(self.ids)}
 
+    # -- construction ------------------------------------------------------------------------------
+    def _lire(self, con: sqlite3.Connection) -> tuple[np.ndarray, np.ndarray]:
+        rows = con.execute("SELECT objet_id, vecteur FROM embedding WHERE objet = ? AND modele = ? ORDER BY objet_id",
+                           (self.objet, self.modele)).fetchall()
+        ids = np.array([r[0] for r in rows], dtype=np.int64)
+        return ids, np.frombuffer(b"".join(r[1] for r in rows), dtype=np.float16).reshape(len(rows), -1)
+
+    @staticmethod
+    def _empreintes(m: np.ndarray) -> np.ndarray:
+        return np.packbits(np.asarray(m) > 0, axis=1).view(np.uint64)
+
+    def _construire(self, con: sqlite3.Connection, racine: Path, n: int, lot: int = 20000) -> None:
+        """Copie les vecteurs de la base vers le cache, par lots (jamais tout en RAM)."""
+        racine.parent.mkdir(parents=True, exist_ok=True)
+        for ancien in racine.parent.glob(f"{self.objet}-{self.modele.replace(':', '_')}-*"):
+            ancien.unlink()                              # une seule version du cache par objet et modèle
+        cur = con.execute("SELECT objet_id, vecteur FROM embedding WHERE objet = ? AND modele = ? ORDER BY objet_id",
+                          (self.objet, self.modele))
+        premier = cur.fetchone()
+        dim = len(premier[1]) // 2
+        tmp = racine.with_suffix(".f16.tmp.npy")
+        m = np.lib.format.open_memmap(tmp, mode="w+", dtype=np.float16, shape=(n, dim))
+        ids = np.empty(n, dtype=np.int64)
+        bits = np.empty((n, dim // 64), dtype=np.uint64)
+        k, bloc = 0, [premier]
+        while bloc:
+            bloc += cur.fetchmany(lot - len(bloc))
+            v = np.frombuffer(b"".join(r[1] for r in bloc), dtype=np.float16).reshape(len(bloc), dim)
+            m[k:k + len(bloc)] = v
+            ids[k:k + len(bloc)] = [r[0] for r in bloc]
+            bits[k:k + len(bloc)] = self._empreintes(v)
+            k += len(bloc)
+            bloc = cur.fetchmany(lot)
+        m.flush()
+        del m
+        tmp.rename(racine.with_suffix(".f16.npy"))
+        np.save(racine.with_suffix(".ids.npy"), ids)
+        np.save(racine.with_suffix(".bits.npy"), bits)        # écrit en dernier : il marque un cache complet
+
+    # -- lecture -----------------------------------------------------------------------------------
     def __len__(self) -> int:
         return len(self.ids)
 
+    def _lignes(self, ks) -> np.ndarray:
+        ks = np.asarray(ks, dtype=np.int64)
+        if not len(ks):
+            return np.zeros((0, self.m.shape[1]), dtype=np.float32)
+        ordre = np.argsort(ks)                           # lecture du disque dans l'ordre
+        out = np.empty((len(ks), self.m.shape[1]), dtype=np.float32)
+        out[ordre] = self.m[ks[ordre]]
+        return out
+
     def vecteur(self, oid: int) -> np.ndarray | None:
         k = self.pos.get(oid)
-        return None if k is None else self.m[k].astype(np.float32)
+        return None if k is None else np.asarray(self.m[k], dtype=np.float32)
 
     def sim(self, a: int, b: int) -> float | None:
         va, vb = self.vecteur(a), self.vecteur(b)
@@ -194,23 +268,29 @@ class Magasin:
         ks = [self.pos[i] for i in ids if i in self.pos]
         if not ks:
             return {}
-        s = self.m[ks].astype(np.float32) @ v.astype(np.float32)
+        s = self._lignes(ks) @ v.astype(np.float32)
         return {int(self.ids[k]): float(x) for k, x in zip(ks, s)}
 
     def voisins(self, v: np.ndarray, k: int = 10, exclure: set[int] | None = None,
                 parmi: np.ndarray | None = None) -> list[Voisin]:
         if len(self) == 0:
             return []
-        scores = (self.m @ v.astype(self.m.dtype)).astype(np.float32)
-        if parmi is not None:
-            masque = np.full(len(self), -np.inf, dtype=np.float32)
-            idx = [self.pos[int(i)] for i in parmi if int(i) in self.pos]
-            masque[idx] = 0
-            scores = scores + masque
+        v = v.astype(np.float32)
         exclure = exclure or set()
-        n = min(len(self), k + len(exclure))
+        if parmi is not None:
+            ks = np.array([self.pos[int(i)] for i in parmi if int(i) in self.pos], dtype=np.int64)
+        elif self.complet or isinstance(self.m, np.ndarray) and not isinstance(self.m, np.memmap):
+            ks = np.arange(len(self))
+        else:
+            # 1. Empreintes : distance de Hamming à la requête, sur tous les vecteurs (≈ 10 ms pour 300 k).
+            q = self._empreintes(v[None, :])[0]
+            ham = np.bitwise_count(self.bits ^ q).sum(axis=1, dtype=np.int32)
+            c = min(len(self), max(self.CANDIDATS, 8 * (k + len(exclure))))
+            ks = np.argpartition(ham, c - 1)[:c]
+        # 2. Calcul exact sur les candidats.
+        scores = (self.m @ v if len(ks) == len(self) and not isinstance(self.m, np.memmap) else self._lignes(ks) @ v)
+        n = min(len(ks), k + len(exclure))
         top = np.argpartition(-scores, n - 1)[:n]
         top = top[np.argsort(-scores[top])]
-        out = [Voisin(int(self.ids[t]), float(scores[t])) for t in top
-               if int(self.ids[t]) not in exclure and np.isfinite(scores[t])]
+        out = [Voisin(int(self.ids[ks[t]]), float(scores[t])) for t in top if int(self.ids[ks[t]]) not in exclure]
         return out[:k]
