@@ -8,6 +8,7 @@ au fil de l'eau ; les commandes « /… » changent les paramètres en cours de 
 from __future__ import annotations
 
 import random
+import re
 import time
 
 from rich.text import Text
@@ -100,6 +101,17 @@ MENU = [
 ]
 
 
+def mots_recents(con, n: int = 12) -> list[str]:
+    """Les mots des dernières parties (réponses, cibles, cartes), du plus récent au plus ancien, en capitales
+    sans trait d'union ni espace : de quoi remplir les cubes du logo."""
+    rows = con.execute(
+        """SELECT e.forme FROM evenement ev JOIN entree e ON e.id = ev.entree_id
+           WHERE ev.type IN ('reponse', 'revelation') AND e.type NOT IN ('nom_propre', 'sigle')
+           ORDER BY ev.id DESC LIMIT 300""").fetchall()
+    mots = [re.sub(r"[^A-Za-zÀ-ÖØ-öø-ÿŒœÆæ]", "", r[0]).upper() for r in rows]
+    return list(dict.fromkeys(m for m in mots if len(m) >= 4))[:n]
+
+
 class Accueil(Screen):
     BINDINGS = [Binding("q", "app.quit", "Quitter")]
 
@@ -123,6 +135,7 @@ class Accueil(Screen):
     def on_mount(self) -> None:
         self._rng = random.Random(7)
         self._t = 0
+        self._mots = logo.mots_pour_logo(mots_recents(self.app.ctx.con))
         self._anim = self.set_interval(0.06, self._animer)
         self.query_one("#menu").focus()
         self.rafraichir()
@@ -130,7 +143,8 @@ class Accueil(Screen):
     def _animer(self) -> None:
         self._t += 1
         p = min(1.0, self._t / 22)
-        self.query_one("#logo", Static).update(logo.brouiller(p, self._rng) if p < 1 else logo.rendre())
+        self.query_one("#logo", Static).update(logo.brouiller(p, self._rng, mots=self._mots) if p < 1
+                                               else logo.rendre(mots=self._mots))
         if p >= 1:
             self._anim.stop()
 

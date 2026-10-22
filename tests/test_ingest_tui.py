@@ -133,3 +133,10 @@ async def test_cartes_fleches_et_avance_auto(tmp_path):
         assert ecran.resultat.correct
         await pilot.pause(ecran.AVANCE_AUTO + 0.4)
         assert ecran.faits == faits + 2
+
+
+def test_logo_mots_recents():
+    m = logo.mots_pour_logo(["OISEAUMOQUEUR", "LAURENTIE", "CRÉOLE", "AH"])
+    assert m == {"L": "CRÉOLE", "E": "OISEAUMOQUEUR", "M": "LAURENTIE"}     # 8 cubes pour L, 13 pour E et M
+    assert "É" in logo.rendre(mots=m).plain and "G" not in logo.rendre(mots=m).plain   # plus LANGUE
+    assert logo.mots_pour_logo([]) == {}

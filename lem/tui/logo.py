@@ -1,6 +1,6 @@
 """Le logo : trois lettres géantes bâties de cubes, chaque cube portant une lettre.
 
-L est fait de LANGUE, E d'ESPRIT, M de MÉMOIRE. Les cubes partagent leurs arêtes
+L est fait de LANGUE, E d'ESPRIT, M de MÉMOIRE — ou des mots de ta dernière partie (`mots_pour_logo`). Les cubes partagent leurs arêtes
 (grille de caractères de boîte) et une extrusion ombrée vers le haut-droite donne
 l'illusion de perspective : face supérieure claire, face latérale plus sombre.
 """
@@ -29,14 +29,34 @@ BOITE = {
 STYLE = {"arete": "bold #f2f2f2", "lettre": "bold #ffffff", "dessus": "#8a8a8a", "cote": "#4a4a4a"}
 
 
-def cellules(texte: str = "LEM") -> list[tuple[int, int, str]]:
+def nb_cubes(ch: str) -> int:
+    return sum(ligne.count("X") for ligne in GLYPHES[ch])
+
+
+def mots_pour_logo(candidats: list[str], texte: str = "LEM") -> dict[str, str]:
+    """Attribue à chaque lettre du logo le mot dont la longueur remplit le mieux ses cubes
+    (exactement, sinon le plus long qui tient, sinon le plus court qui dépasse)."""
+    libres = [m for m in dict.fromkeys(candidats) if len(m) >= 4]
+    out = {}
+    for ch in sorted(texte, key=nb_cubes):            # les lettres à peu de cubes choisissent d'abord
+        n = nb_cubes(ch)
+        if not libres:
+            break
+        m = min(libres, key=lambda m: (0, 0) if len(m) == n else (1, n - len(m)) if len(m) < n else (2, len(m) - n))
+        out[ch] = m
+        libres.remove(m)
+    return out
+
+
+def cellules(texte: str = "LEM", mots: dict[str, str] | None = None) -> list[tuple[int, int, str]]:
     out, x0 = [], 0
     for ch in texte:
         g, k = GLYPHES[ch], 0
+        mot = (mots or {}).get(ch) or MOTS[ch]
         for r, ligne in enumerate(g):
             for c, v in enumerate(ligne):
                 if v == "X":
-                    out.append((r, x0 + c, MOTS[ch][k % len(MOTS[ch])]))
+                    out.append((r, x0 + c, mot[k % len(mot)]))
                     k += 1
         x0 += len(g[0]) + 1
     return out
@@ -61,8 +81,9 @@ def _aretes(cells, ox: int, oy: int) -> dict[tuple[int, int], str]:
     return g
 
 
-def grille(texte: str = "LEM", lettres: dict | None = None) -> dict[tuple[int, int], tuple[str, str]]:
-    return grille_cellules(cellules(texte), lettres)
+def grille(texte: str = "LEM", lettres: dict | None = None,
+           mots: dict[str, str] | None = None) -> dict[tuple[int, int], tuple[str, str]]:
+    return grille_cellules(cellules(texte, mots), lettres)
 
 
 def grille_cellules(cells, lettres: dict | None = None) -> dict[tuple[int, int], tuple[str, str]]:
@@ -85,8 +106,8 @@ def grille_cellules(cells, lettres: dict | None = None) -> dict[tuple[int, int],
     return g
 
 
-def rendre(texte: str = "LEM", lettres: dict | None = None) -> Text:
-    return _texte(grille(texte, lettres))
+def rendre(texte: str = "LEM", lettres: dict | None = None, mots: dict[str, str] | None = None) -> Text:
+    return _texte(grille(texte, lettres, mots))
 
 
 def rangee(mot: str, style_lettre: str | None = None) -> Text:
@@ -110,13 +131,13 @@ def _texte(g: dict[tuple[int, int], tuple[str, str]]) -> Text:
     return t
 
 
-def brouiller(progres: float, rng: random.Random, texte: str = "LEM") -> Text:
+def brouiller(progres: float, rng: random.Random, texte: str = "LEM", mots: dict[str, str] | None = None) -> Text:
     """Effet de décodage : les lettres des cubes défilent puis se figent de gauche à droite."""
-    cells = cellules(texte)
+    cells = cellules(texte, mots)
     alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
     n_fixes = int(progres * len(cells))
     lettres = {i: rng.choice(alphabet) for i in range(n_fixes, len(cells))}
-    return rendre(texte, lettres)
+    return rendre(texte, lettres, mots)
 
 
 def largeur(texte: str = "LEM") -> int:
