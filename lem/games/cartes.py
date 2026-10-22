@@ -29,7 +29,7 @@ from lem.grading.direct import VerdictProd, VerdictRecep, noter_prod, noter_rece
 from lem.journal import Evenement, Frappe, ajouter_notation, ecrire, nettoyer_saisie
 from lem.memory import scheduler
 from lem.memory.knowledge import Y_PAR_NOTE, CarteConnaissance, score_apprentissage
-from lem.orthographe import Diagnostic, diagnostiquer, enregistrer_faute
+from lem.orthographe import Diagnostic, accents_manquants, accents_tolerants, diagnostiquer, enregistrer_faute
 
 CARTES = enregistrer(Jeu(
     id="cartes",
@@ -205,7 +205,8 @@ class PartieCartes:
         recep = prod = None
         fautes: list[Diagnostic] = []
         if it.exercice == "graphie":
-            correct = texte.strip().lower() == it.forme.lower()
+            correct = texte.strip().lower() == it.forme.lower() or (
+                accents_tolerants(self.con) and accents_manquants(texte, it.forme))
             note = 3 if correct and not it.indices else 1
             trace = "ortho"
             diag = None if correct else diagnostiquer(self.con, texte, cible_id=it.entree_id)
@@ -270,7 +271,7 @@ class PartieCartes:
 
     def recopier(self, res: Resultat, attendu: str, texte: str, latence_ms: int) -> bool:
         """Après une faute : tu retapes la bonne graphie. Journalisé, hors FSRS."""
-        ok = texte.strip() == attendu or texte.strip().lower() == attendu.lower()
+        ok = texte.strip().lower() == attendu.lower() or (accents_tolerants(self.con) and accents_manquants(texte, attendu))
         ecrire(self.con, self.session_id, Evenement(
             "cartes", "recopie", entree_id=res.item.entree_id, reponse=texte, correct=ok, latence_ms=latence_ms,
             data={"attendu": attendu, "fsrs": False}))

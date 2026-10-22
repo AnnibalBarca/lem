@@ -74,8 +74,8 @@ PC Windows, via WSL2**, et me rendre un rapport chiffré. Lis d'abord `README.md
 
 - Ne change ni l'architecture (journal en ajout seul, état dérivé et rejouable), ni le design
   (monochrome ; la couleur ne sert qu'à signifier).
-- **Graphie stricte** : aucune variante orthographique n'est acceptée, accents compris. Ne réintroduis
-  jamais de tolérance.
+- **Graphie** : aucune variante orthographique n'est acceptée ; seule exception, réglable et choisie par
+  l'utilisateur : les accents manquants (`accents_tolerants`). N'ajoute aucune autre tolérance.
 - Aucune donnée dans le dépôt (`~/.lem/` uniquement). Pas de secrets dans les commits.
 - Ne modifie rien côté Windows (`.wslconfig`, pare-feu, services) sans me le demander.
 - Travaille sur une branche `local/integration`, en commits petits et clairs, puis pousse-la. Ne pousse

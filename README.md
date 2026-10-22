@@ -31,7 +31,9 @@ ta mémoire.
 | **Étalonnage** | test adaptatif oui/non, avec pseudo-mots et vérifications | place ta carte de connaissance |
 | **Atlas** | ta carte, ton profil, ta signature d'imprécision, tes confusions, ta métacognition | — |
 
-**Graphie stricte.** Aucune variante n'est acceptée, accents compris. Chaque faute est identifiée
+**Graphie exigeante.** Aucune variante n'est acceptée ; seuls les accents *manquants* sont tolérés par
+défaut (« creolisation » vaut « créolisation », un accent faux reste une faute ; `/accents non` les exige,
+pour tous les jeux). Chaque faute est identifiée
 (accent, consonne double, h muet, inversion, touche voisine…), classée (orthographe ou frappe),
 montrée lettre par lettre en jaune, et le mot doit être retapé juste. Il revient ensuite trois cartes
 plus loin, puis à intervalles espacés, sur une trace FSRS dédiée.

@@ -154,12 +154,51 @@ def est_forme(con: sqlite3.Connection, saisie: str) -> bool:
     return con.execute("SELECT 1 FROM forme WHERE forme = ? LIMIT 1", (saisie.strip().lower(),)).fetchone() is not None
 
 
+# ── Accents manquants ──────────────────────────────────────────────────────────────────────────
+# Réglage global (« accents_tolerants », vrai par défaut) : un accent ou une ligature MANQUANTS ne sont pas
+# des fautes (« creolisation » vaut « créolisation », « oeuvre » vaut « œuvre »). Un accent FAUX en reste
+# une (« crèolisation »), comme un trait d'union ou une apostrophe manquants. Désactivable : /accents non.
+
+def accents_tolerants(con: sqlite3.Connection) -> bool:
+    from lem.db import get_reglage
+
+    return bool(get_reglage(con, "accents_tolerants", True))
+
+
+def accents_manquants(saisie: str, forme: str) -> bool:
+    """Vrai si `saisie` est `forme` à des accents ou ligatures manquants près (casse ignorée)."""
+    s, f = saisie.strip().lower(), forme.strip().lower()
+    if s == f:
+        return True
+    if normaliser(s) != normaliser(f):
+        return False
+    i = 0
+    for ch in f:
+        if s.startswith(ch, i):
+            i += len(ch)
+            continue
+        base = normaliser(ch)
+        if base and s.startswith(base, i):
+            i += len(base)
+            continue
+        return False
+    return i == len(s)
+
+
+def formes_tolerees(con: sqlite3.Connection, saisie: str) -> list[tuple[str, int]]:
+    """(forme, entrée) dont la saisie n'est qu'une version sans certains accents."""
+    return [(f, e) for f, e in con.execute("SELECT forme, entree_id FROM forme WHERE norme = ?", (normaliser(saisie),))
+            if accents_manquants(saisie, f)]
+
+
 def diagnostiquer(con: sqlite3.Connection, saisie: str, cible_id: int | None = None,
                   candidats: list[str] | None = None) -> Diagnostic | None:
     """Diagnostique une saisie qui n'est PAS une forme exacte. None = pas un mot reconnaissable."""
     s = saisie.strip().lower()
     if len(s) < 2 or est_forme(con, s):
         return None
+    if accents_tolerants(con) and formes_tolerees(con, s):
+        return None                                   # seulement des accents manquants : pas une faute
     # 1. La cible attendue, si on en a une (cartes, bombe en apprentissage).
     if cible_id is not None:
         formes = [r[0] for r in con.execute("SELECT forme FROM forme WHERE entree_id = ?", (cible_id,))]

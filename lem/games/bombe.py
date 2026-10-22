@@ -34,7 +34,7 @@ from lem.games.base import PARAMS_FILTRES, Jeu, Param, enregistrer, filtres_depu
 from lem.games.pool import selectionner
 from lem.journal import Evenement, Frappe, ecrire, nettoyer_saisie
 from lem.memory.knowledge import CarteConnaissance, score_apprentissage
-from lem.orthographe import Diagnostic, diagnostiquer, enregistrer_faute
+from lem.orthographe import Diagnostic, accents_manquants, accents_tolerants, diagnostiquer, enregistrer_faute
 from lem.similarite import Comparaison, Proximite, comparer, enregistrer_confusion
 from lem.texte import normaliser
 
@@ -95,6 +95,7 @@ class Retour:
     vie_gagnee: bool = False
     points: float = 0.0
     graphie: Diagnostic | None = None           # faute de graphie identifiée
+    forme: str | None = None                    # la forme reconnue (accentuée si la saisie ne l'était pas)
 
 
 class PartieBombe:
@@ -112,6 +113,7 @@ class PartieBombe:
         self.historique: deque[bool] = deque(maxlen=10)
         self.latences: deque[int] = deque(maxlen=10)
         self.difficulte = 0.5
+        self.accents_tolerants = accents_tolerants(con)
         self.n_invites = 0
         self.cibles_vues: set[int] = set()
         self.retours: list[tuple[int, int, int, int]] = []   # (échéance, cible, longueur de suite, retours restants)
@@ -306,8 +308,15 @@ class PartieBombe:
 
     # -- tour de jeu ---------------------------------------------------------
     def _valider(self, texte: str) -> tuple[str | None, set[int]]:
+        """(forme reconnue, entrées). Sans certains accents, la forme accentuée compte si le réglage le permet."""
         cle = texte.strip().lower()
-        return cle, set(self.valides.get(cle, ()))
+        ids = self.valides.get(cle)
+        if ids is None and self.accents_tolerants:
+            fs = self._normes.get(normaliser(cle), ())
+            for f in ((fs,) if isinstance(fs, str) else fs):
+                if accents_manquants(cle, f):
+                    return f, set(self.valides.get(f, ()))
+        return cle, set(ids or ())
 
     def _diagnostic(self, texte: str) -> Diagnostic | None:
         suite = self.invite.suite
@@ -330,6 +339,8 @@ class PartieBombe:
         suite_ok = inv.suite in normaliser(texte)
         base = {"suite": inv.suite, "cible": inv.cible_forme, "k": round(inv.k, 2), "n": inv.n_solutions,
                 "repetitions_restantes": inv.repetitions, "fsrs": False}
+        if cle and cle != texte.strip().lower():
+            base["accents_manquants"] = cle
         if cle and suite_ok and not ids and cle not in self.utilises and not (frappe and frappe.dictee):
             diag = self._diagnostic(texte)
             if diag:
@@ -351,7 +362,7 @@ class PartieBombe:
         vie = self._regain(cle, z)
         trace_existe = self.con.execute("SELECT 1 FROM trace_etat WHERE entree_id = ? AND trace = 'prod'",
                                         (eid,)).fetchone() is not None
-        retour = Retour(True, "", eid, points=points, vie_gagnee=vie)
+        retour = Retour(True, "", eid, points=points, vie_gagnee=vie, forme=cle)
 
         if inv.cible_id is not None and eid == inv.cible_id:
             retour.cible_trouvee = True

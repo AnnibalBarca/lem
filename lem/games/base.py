@@ -118,7 +118,8 @@ def executer_commande(jeu: Jeu, params: dict, texte: str) -> ResultatCommande:
     nom = morceaux[0].lower()
     if nom in {"aide", "help", "?"}:
         lignes = [f"/{p.nom} <{p.type.__name__}>  {p.libelle}{' — ' + p.aide if p.aide else ''}" for p in jeu.params]
-        return ResultatCommande(True, "\n".join(lignes + ["/params  état courant", "/quitter"]))
+        return ResultatCommande(True, "\n".join(lignes + ["/accents oui|non  accents manquants tolérés (tous les jeux)",
+                                                         "/params  état courant", "/quitter"]))
     if nom == "params":
         return ResultatCommande(True, "  ".join(f"{p.nom}={p.afficher(params.get(p.nom))}" for p in jeu.params))
     p = jeu.param(nom)

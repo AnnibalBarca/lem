@@ -204,10 +204,12 @@ tu les repéreras parfois. Le générateur est à affiner (type Wuggy).
 L'Étalonnage choisit ses mots là où l'information est maximale (p(1 − p)). Un « oui » donné à un
 pseudo-mot réduit le poids de tes « oui » suivants.
 
-## 5bis. Graphie : aucune variante
+## 5bis. Graphie : aucune variante (sauf les accents manquants, au choix)
 
 `lem/orthographe.py`. Une saisie n'est valide que si c'est une **forme exacte** du lexique (casse mise à
-part ; accents compris). Si la saisie est proche d'un mot réel, on produit un diagnostic :
+part). Exception réglable, active par défaut depuis le premier essai réel : un accent ou une ligature
+**manquants** ne sont pas des fautes (`accents_tolerants`, `/accents oui|non` dans tout jeu) ; un accent faux,
+un trait d'union ou une apostrophe manquants en restent. La forme accentuée est toujours affichée. Si la saisie est proche d'un mot réel, on produit un diagnostic :
 * le mot visé et la distance (Damerau-Levenshtein) ;
 * les types de faute : accent, consonne double, h muet, omission, ajout, substitution, inversion,
   touche voisine (AZERTY), graphème (i/y, c/k/qu…), trait d'union ;

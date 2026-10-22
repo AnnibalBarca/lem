@@ -231,3 +231,16 @@ def test_cartes_ignorent_les_sens_sans_definition(con, carte, rng):
     con.execute("UPDATE sens SET definition = '' WHERE entree_id = ?", (eid_,))
     partie = PartieCartes(con, params("cartes", nouveaux=0), carte, rng=rng)
     assert partie._item("recep", eid_) is None
+
+
+def test_bombe_accents_manquants(con, carte, rng):
+    from lem.db import set_reglage
+
+    b = PartieBombe(con, params("bombe", mode="libre", solutions_min=1), carte, rng=rng)
+    b.invite.suite = "min"
+    r = b.repondre("eminent", 800)
+    assert r.valide and r.forme == "éminent"                     # reconnu, affiché avec ses accents
+    set_reglage(con, "accents_tolerants", False)
+    b2 = PartieBombe(con, params("bombe", mode="libre", solutions_min=1), carte, rng=rng)
+    b2.invite.suite = "min"
+    assert not b2.repondre("eminent", 800).valide

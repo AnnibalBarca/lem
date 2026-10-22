@@ -3,7 +3,7 @@ from datetime import timedelta
 
 import pytest
 
-from lem.db import now
+from lem.db import set_reglage, now
 from lem.grading.direct import decouper_synonymes, noter_prod, noter_recep
 from lem.journal import Evenement, ajouter_notation, ecrire
 from lem.memory import scheduler
@@ -100,8 +100,21 @@ def test_prod_exact_flechi_et_confusion(con):
     v = noter_prod(con, a, "homonyme")
     assert not v.correct and v.comparaison.proximite == Proximite.FORME
     assert noter_prod(con, eid(con, "thuriféraire"), "laudateur").mode == "synonyme"
-    v = noter_prod(con, eid(con, "éminent"), "eminent")                # aucune variante : accent manquant = faute
+    assert noter_prod(con, eid(con, "éminent"), "eminent").correct      # accent manquant : toléré par défaut
+    assert not noter_prod(con, eid(con, "éminent"), "èminent").correct   # accent faux : faute
+    set_reglage(con, "accents_tolerants", False)                        # mode strict : accent manquant = faute
+    v = noter_prod(con, eid(con, "éminent"), "eminent")
     assert not v.correct and v.mode == "graphie" and v.graphie.types == ["accent"]
+
+
+def test_accents_manquants():
+    from lem.orthographe import accents_manquants
+
+    assert accents_manquants("creolisation", "créolisation") and accents_manquants("oeuvre", "œuvre")
+    assert accents_manquants("Eminent", "éminent")
+    assert not accents_manquants("crèolisation", "créolisation")        # accent faux
+    assert not accents_manquants("portemanteau", "porte-manteau")       # le trait d'union compte
+    assert not accents_manquants("aujourdhui", "aujourd'hui")
 
 
 def test_carte_connaissance_persistance(con):

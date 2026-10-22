@@ -356,6 +356,10 @@ class EcranPartie(Screen):
         if texte.strip("/ ").lower() in {"quitter", "q", "menu"}:
             self.action_quitter()
             return True
+        if texte.strip("/ ").lower().split()[:1] == ["accents"]:
+            self._accents(texte.strip("/ ").split()[1:])
+            self.query_one("#saisie", Input).value = ""
+            return True
         res = executer_commande(self.jeu, self.params, texte)
         style = BLANC if res.ok else PROXIMITES[Proximite.JUMEAU]
         self.maj("retour", Text(res.message, style=style))
@@ -365,6 +369,23 @@ class EcranPartie(Screen):
                 self.reconfigurer()
         self.query_one("#saisie", Input).value = ""
         return True
+
+    def _accents(self, args: list[str]) -> None:
+        """/accents oui|non — réglage global, pour tous les jeux : accents manquants tolérés ou non."""
+        from lem.db import set_reglage
+        from lem.orthographe import accents_tolerants
+
+        if args:
+            if args[0].lower() not in {"oui", "non"}:
+                self.maj("retour", Text("/accents oui | non", style=GRIS))
+                return
+            set_reglage(self.ctx.con, "accents_tolerants", args[0].lower() == "oui")
+            self.ctx.con.commit()
+            if self.partie is not None and hasattr(self.partie, "accents_tolerants"):
+                self.partie.accents_tolerants = args[0].lower() == "oui"
+        etat = accents_tolerants(self.ctx.con)
+        self.maj("retour", Text("accents manquants : " + ("tolérés (pas une faute)" if etat else "comptés comme fautes"),
+                                style=BLANC))
 
     def action_quitter(self) -> None:
         self.app.pop_screen()
@@ -675,7 +696,7 @@ class EcranBombe(EcranPartie):
         self.demarrer()
 
     def _apres_reponse(self, r, texte: str) -> None:
-        self._retour(r, texte)
+        self._retour(r, r.forme or texte)
         if r.valide:
             self._afficher_invite()
 

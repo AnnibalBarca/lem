@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from lem.db import get_reglage
-from lem.orthographe import Diagnostic, diagnostiquer
+from lem.orthographe import Diagnostic, accents_manquants, accents_tolerants, diagnostiquer, formes_tolerees
 from lem.similarite import Comparaison, comparer, normaliser
 
 
@@ -63,9 +63,12 @@ def decouper_synonymes(reponse: str) -> list[str] | None:
 
 
 def entrees_de_forme(con: sqlite3.Connection, forme: str) -> list[int]:
-    """Entrées dont `forme` est une forme EXACTE (casse mise à part). Aucune variante tolérée."""
-    rows = con.execute("SELECT DISTINCT entree_id FROM forme WHERE forme = ?", (forme.strip().lower(),))
-    return [r[0] for r in rows]
+    """Entrées dont `forme` est une forme exacte (casse mise à part), ou la même sans certains accents si le
+    réglage `accents_tolerants` est actif. Aucune autre variante."""
+    rows = [r[0] for r in con.execute("SELECT DISTINCT entree_id FROM forme WHERE forme = ?", (forme.strip().lower(),))]
+    if not rows and accents_tolerants(con):
+        rows = list(dict.fromkeys(e for _, e in formes_tolerees(con, forme)))
+    return rows
 
 
 RE_MOT = re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿœæŒÆ]+(?:-[A-Za-zÀ-ÖØ-öø-ÿœæ]+)*")
@@ -165,7 +168,7 @@ def noter_prod(con: sqlite3.Connection, entree_id: int, reponse: str, magasin_en
     cible = con.execute("SELECT forme FROM entree WHERE id = ?", (entree_id,)).fetchone()["forme"]
     if not reponse:
         return VerdictProd(False, "inconnu", None, None, 1)
-    if reponse.lower() == cible.lower():
+    if reponse.lower() == cible.lower() or (accents_tolerants(con) and accents_manquants(reponse, cible)):
         return VerdictProd(True, "exact", entree_id, None, 3)
     ids = entrees_de_forme(con, reponse)
     if entree_id in ids:

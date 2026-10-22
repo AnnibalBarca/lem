@@ -50,8 +50,8 @@ Machine : MacBook M4 15 pouces, 16 Go de RAM. Les données vont dans `~/.lem/` (
 
 - Ne change ni l'architecture (journal en ajout seul, état dérivé et rejouable), ni le design
   (monochrome ; la couleur ne sert qu'à signifier).
-- **Graphie stricte** : aucune variante orthographique n'est acceptée, accents compris. Ne réintroduis
-  jamais de tolérance.
+- **Graphie** : aucune variante orthographique n'est acceptée ; seule exception, réglable et choisie par
+  l'utilisateur : les accents manquants (`accents_tolerants`). N'ajoute aucune autre tolérance.
 - Aucune donnée dans le dépôt (`~/.lem/` uniquement). Pas de secrets dans les commits.
 - Travaille sur une branche `local/integration`, en commits petits et clairs, puis pousse-la. Ne pousse
   pas sur `main`.

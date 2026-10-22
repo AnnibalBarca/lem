@@ -29,7 +29,7 @@ Livrables, dans l'ordre :
 * Ne modifie rien côté Windows (pare-feu, services, `.wslconfig`) : **propose** la commande, l'utilisateur
   décide. Pas de `sudo` sans lui demander.
 * Règles du projet, inchangées : journal en ajout seul, état dérivé rejouable ; monochrome, la couleur ne
-  sert qu'à signifier ; **graphie stricte** (aucune variante acceptée, accents compris) ; aucune donnée dans
+  sert qu'à signifier ; **graphie exigeante** (aucune variante ; seuls les accents manquants sont tolérés, réglage `accents_tolerants`) ; aucune donnée dans
   le dépôt ; code, interface et commits en français, dans le style existant ; petits commits ; tests verts.
 
 ## 2. Ce qui est déjà prêt (à réutiliser, pas à refaire)
