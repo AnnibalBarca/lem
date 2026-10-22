@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 
 from lem.confusables import IndexFormel, grappe
 from lem.db import iso, now
+from lem.games.bombe import TYPES_HORS_JEU
 from lem.games.base import PARAMS_FILTRES, Jeu, Param, enregistrer, filtres_depuis
 from lem.games.pool import selectionner
 from lem.grading.direct import VerdictProd, VerdictRecep, noter_prod, noter_recep
@@ -43,6 +44,7 @@ CARTES = enregistrer(Jeu(
         Param("graphie", "Reprise des fautes de graphie", bool, True, "tes fautes reviennent jusqu'à être justes"),
         Param("nouveaux", "Mots nouveaux", int, 10, "", 0, 200),
         Param("revisions_max", "Révisions max", int, 100, "", 0, 2000),
+        Param("noms_propres", "Noms propres et sigles", bool, False, "les apprendre aussi (prénoms, lieux, sigles)"),
         *PARAMS_FILTRES,
     ],
 ))
@@ -122,8 +124,16 @@ class PartieCartes:
         if p.get("graphie", True):
             traces = (*traces, "ortho")
 
+        # Ni prénoms, ni lieux, ni sigles, sauf si on le demande — ni en mots nouveaux, ni en révision.
+        exclus = () if p.get("noms_propres") else TYPES_HORS_JEU
+        hors_jeu = {r[0] for r in self.con.execute(
+            f"SELECT id FROM entree WHERE type IN ({', '.join('?' * len(exclus))})", exclus)} if exclus else set()
+        vivier = [r for r in vivier if r["type"] not in exclus]
+
         items: list[Item] = []
         for t in scheduler.dues(self.con, limite=p["revisions_max"], traces=traces, entree_ids=ids):
+            if t.entree_id in hors_jeu:
+                continue
             it = self._item("graphie" if t.trace == "ortho" else t.trace, t.entree_id, t.sens_id)
             if it:
                 items.append(it)
@@ -263,6 +273,9 @@ class PartieCartes:
 
     def _insister(self, d: Diagnostic) -> None:
         """Remet le mot mal écrit trois cartes plus loin (une seule fois par session et par mot)."""
+        if not self.params.get("noms_propres") and self.con.execute(
+                "SELECT type FROM entree WHERE id = ?", (d.entree_id,)).fetchone()[0] in TYPES_HORS_JEU:
+            return
         if any(x.exercice == "graphie" and x.entree_id == d.entree_id for x in self.file):
             return
         it = self._item("graphie", d.entree_id)

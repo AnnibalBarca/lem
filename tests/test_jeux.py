@@ -244,3 +244,15 @@ def test_bombe_accents_manquants(con, carte, rng):
     b2 = PartieBombe(con, params("bombe", mode="libre", solutions_min=1), carte, rng=rng)
     b2.invite.suite = "min"
     assert not b2.repondre("eminent", 800).valide
+
+
+def test_cartes_sans_noms_propres(con, carte, rng):
+    from lem.orthographe import Diagnostic
+
+    pp = con.execute("SELECT id FROM entree WHERE type = 'nom_propre'").fetchone()[0]
+    partie = PartieCartes(con, params("cartes", nouveaux=200, confusables=False), carte, rng=rng)
+    assert all(it.entree_id != pp for it in partie.file)                       # jamais en mot nouveau
+    partie._insister(Diagnostic("pouligni", "pouligny-saint-pierre", pp, 1, ["substitution"], False, 0.9))
+    assert all(it.entree_id != pp for it in partie.file)                       # ni en reprise de graphie
+    partie2 = PartieCartes(con, params("cartes", nouveaux=200, confusables=False, noms_propres=True), carte, rng=rng)
+    assert any(it.entree_id == pp for it in partie2.file)
