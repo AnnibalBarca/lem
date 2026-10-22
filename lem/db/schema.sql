@@ -163,6 +163,22 @@ CREATE TABLE IF NOT EXISTS notation (
 );
 CREATE INDEX IF NOT EXISTS idx_notation_evenement ON notation(evenement_id);
 
+-- Observations de la carte de connaissance : chaque mise à jour de θ et des résidus, avec ses paramètres.
+-- La carte se rejoue entièrement à partir d'ici (CarteConnaissance.rejouer). `depuis_note` : y découle de
+-- la note de l'événement lié, et le rejeu prend la meilleure note disponible (Claude, juge…) au lieu de
+-- celle connue sur le moment.
+CREATE TABLE IF NOT EXISTS observation (
+    id           INTEGER PRIMARY KEY,
+    ts           TEXT NOT NULL,
+    evenement_id INTEGER REFERENCES evenement(id),
+    entree_id    INTEGER NOT NULL REFERENCES entree(id),
+    y            REAL,                         -- NULL : en attente d'une note (définition à juger)
+    poids        REAL NOT NULL DEFAULT 1,
+    source       TEXT NOT NULL DEFAULT '',
+    depuis_note  INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_observation_ts ON observation(ts, id);
+
 -- Mnémotechnie : images mentales (écrites ou dictées), dessins, étymologie personnelle.
 CREATE TABLE IF NOT EXISTS mnemo (
     id        INTEGER PRIMARY KEY,

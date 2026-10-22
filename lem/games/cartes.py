@@ -301,13 +301,17 @@ class PartieCartes:
         return ok
 
     def valider(self, res: Resultat, note_soi: int | None = None) -> None:
-        """Clôt une carte : auto-évaluation éventuelle, carte de connaissance, FSRS."""
-        note = note_soi or res.note_proposee
+        """Clôt une carte : auto-évaluation éventuelle, carte de connaissance, FSRS.
+
+        La note retenue est la meilleure disponible (scheduler.note_finale), comme au rejeu : un juge
+        externe (Claude, juge local) passe avant l'auto-évaluation, qui passe avant le cosinus."""
         if note_soi is not None:
             ajouter_notation(self.con, res.evenement_id, "soi", note=note_soi,
                              brut={"proposee": res.note_proposee})
-        if note is not None and res.item.exercice != "graphie":   # la graphie n'informe pas le sens
-            self.carte.observer(res.item.entree_id, Y_PAR_NOTE[note])
+        note = scheduler.note_finale(self.con, res.evenement_id, res.note_proposee)
+        if res.item.exercice != "graphie":                         # la graphie n'informe pas le sens
+            self.carte.observer(res.item.entree_id, None if note is None else Y_PAR_NOTE[note],
+                                source=f"cartes:{res.item.exercice}", evenement_id=res.evenement_id, depuis_note=True)
         if res.item.exercice != "discrimination":
             scheduler.reconstruire(self.con, [res.item.entree_id, *{d.entree_id for d in res.fautes}])
 

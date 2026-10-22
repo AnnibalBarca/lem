@@ -182,3 +182,57 @@ def test_url_ollama(monkeypatch, valeur, attendu):
 
     monkeypatch.setenv("OLLAMA_HOST", valeur)
     assert url_ollama() == attendu
+
+
+def test_carte_rejouable_a_l_identique(con, carte, rng):
+    """Une partie jouée en direct, puis rejouée depuis le journal : mêmes θ, résidus et P."""
+    from lem.games import REGISTRE
+    from lem.games.bombe import PartieBombe
+    from lem.games.cartes import PartieCartes
+    from lem.games.decision import PartieDecision
+    from lem.memory.knowledge import CarteConnaissance
+
+    p = {**REGISTRE["cartes"].defauts(), "nouveaux": 5}
+    partie = PartieCartes(con, p, carte, rng=rng)
+    for _ in range(8):
+        it = partie.suivant()
+        if it is None:
+            break
+        texte = it.forme if it.exercice == "prod" else ("1" if it.exercice == "discrimination" else "?")
+        partie.valider(partie.repondre(it, texte, 2000), 2 if it.exercice == "recep" else None)
+    d = PartieDecision(con, "etalonnage", {**REGISTRE["etalonnage"].defauts(), "questions": 10}, carte, rng=rng)
+    while not d.finie:
+        q = d.suivante()
+        d.repondre(q.entree_id is not None, 700)
+    b = PartieBombe(con, {**REGISTRE["bombe"].defauts(), "solutions_min": 1}, carte, rng=rng)
+    b.exploser()
+
+    theta = dict(carte.theta)
+    p_avant = {e: carte.p(e) for e in carte._prior}
+    neuve = CarteConnaissance(con)
+    n = neuve.rejouer()
+    assert n > 0
+    assert neuve.theta.keys() == theta.keys()
+    assert all(neuve.theta[k] == pytest.approx(v, abs=1e-12) for k, v in theta.items())
+    assert all(neuve.p(e) == pytest.approx(v, abs=1e-12) for e, v in p_avant.items())
+    persiste = dict(con.execute("SELECT entree_id, p_connu FROM connaissance").fetchall())
+    assert all(persiste[e] == pytest.approx(v, abs=1e-9) for e, v in p_avant.items())
+
+
+def test_rejeu_prend_la_meilleure_note(con, carte):
+    """Une définition rejugée par Claude corrige la carte au rejeu ; une vérification en attente s'applique."""
+    from lem.journal import Evenement, ajouter_notation, ecrire
+    from lem.memory.knowledge import CarteConnaissance
+
+    a = eid(con, "zeugma")
+    ev = ecrire(con, None, Evenement("cartes", "reponse", entree_id=a, trace="recep", reponse="?", note_auto=3))
+    carte.observer(a, 0.9, evenement_id=ev, depuis_note=True)
+    ev2 = ecrire(con, None, Evenement("etalonnage", "reponse", entree_id=eid(con, "sigle"), trace="recep", reponse="x"))
+    carte.observer(eid(con, "sigle"), None, evenement_id=ev2, depuis_note=True)
+    p_haut = carte.p(a)
+    ajouter_notation(con, ev, "claude:sonnet", note=1, precision=1, erreur="vide")
+    ajouter_notation(con, ev2, "claude:sonnet", note=1, precision=1, erreur="vide")
+    c2 = CarteConnaissance(con)
+    c2.rejouer()
+    assert c2.p(a) < p_haut
+    assert c2.n_obs(eid(con, "sigle")) == 1

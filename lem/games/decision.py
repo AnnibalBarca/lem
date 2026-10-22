@@ -116,22 +116,26 @@ class PartieDecision:
         if self.jeu == "mot_ou_pas":
             self.score += int(correct)
             self.vies -= int(not correct)
+        ev = ecrire(self.con, self.session_id, Evenement(
+            self.jeu, "reponse", entree_id=q.entree_id, trace="forme", reponse="oui" if oui else "non",
+            correct=correct, latence_ms=latence_ms,
+            data={"pseudo": None if reel else q.texte, "fausses_alertes": self.fausses_alertes, "fsrs": False}))
         if reel:
             # Un « oui » vaut moins si tu as tendance à dire oui aux pseudo-mots.
             taux_fa = self.fausses_alertes / self.pseudos_vus if self.pseudos_vus else 0.0
             if self.jeu == "etalonnage":
-                self.carte.observer(q.entree_id, 0.9 if oui else 0.05, poids=1.0 - 0.8 * taux_fa if oui else 1.0)
+                self.carte.observer(q.entree_id, 0.9 if oui else 0.05, poids=1.0 - 0.8 * taux_fa if oui else 1.0,
+                                    source="etalonnage", evenement_id=ev)
             else:
-                self.carte.observer(q.entree_id, 0.7 if oui else 0.1, poids=0.4)
-        ecrire(self.con, self.session_id, Evenement(
-            self.jeu, "reponse", entree_id=q.entree_id, trace="forme", reponse="oui" if oui else "non",
-            correct=correct, latence_ms=latence_ms,
-            data={"pseudo": None if reel else q.texte, "fausses_alertes": self.fausses_alertes, "fsrs": False}))
+                self.carte.observer(q.entree_id, 0.7 if oui else 0.1, poids=0.4, source="mot_ou_pas", evenement_id=ev)
         return correct
 
     def verification(self, definition: str, latence_ms: int) -> int:
         """Définition demandée après un « oui » : notée plus tard par Claude (exercice recep)."""
         q = self.question
-        return ecrire(self.con, self.session_id, Evenement(
+        ev = ecrire(self.con, self.session_id, Evenement(
             self.jeu, "reponse", entree_id=q.entree_id, trace="recep", reponse=definition,
             latence_ms=latence_ms, data={"verification": True}))
+        # En attente : la carte ne bouge qu'une fois la définition notée (Claude, juge), au prochain rejeu.
+        self.carte.observer(q.entree_id, None, source="etalonnage:verification", evenement_id=ev, depuis_note=True)
+        return ev

@@ -5,7 +5,7 @@ from __future__ import annotations
 from functools import cached_property
 from pathlib import Path
 
-from lem.db import DEFAULT_DB, connect, get_reglage, set_reglage
+from lem.db import DEFAULT_DB, connect, get_reglage, iso, now, set_reglage
 from lem.memory.knowledge import CarteConnaissance
 from lem.vecteurs import HashEmbedder, Magasin, OllamaEmbedder
 
@@ -73,7 +73,7 @@ class Contexte:
             "entrees": c.execute("SELECT COUNT(*) FROM entree").fetchone()[0],
             "sens": c.execute("SELECT COUNT(*) FROM sens").fetchone()[0],
             "connus_estimes": round(c.execute("SELECT COALESCE(SUM(p_connu), 0) FROM connaissance").fetchone()[0]),
-            "dues": c.execute("SELECT COUNT(*) FROM trace_etat WHERE due <= strftime('%Y-%m-%dT%H:%M:%f', 'now')").fetchone()[0],
+            "dues": c.execute("SELECT COUNT(*) FROM trace_etat WHERE due <= ?", (iso(now()),)).fetchone()[0],
             "a_noter": c.execute(
                 """SELECT COUNT(*) FROM evenement ev WHERE ev.type = 'reponse' AND ev.trace = 'recep'
                    AND COALESCE(ev.reponse, '') != '' AND NOT EXISTS (SELECT 1 FROM notation n

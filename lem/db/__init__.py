@@ -15,8 +15,18 @@ from lem.texte import normaliser
 DEFAULT_DB = Path(os.environ.get("LEM_HOME", Path.home() / ".lem")) / "lem.sqlite"
 
 
+_horloge = None
+
+
 def now() -> datetime:
-    return datetime.now(timezone.utc)
+    """L'heure du moteur. Réglable (`regler_horloge`) pour simuler des semaines de jeu en quelques secondes."""
+    return _horloge() if _horloge is not None else datetime.now(timezone.utc)
+
+
+def regler_horloge(fn=None) -> None:
+    """fn() → datetime aware ; None rend l'horloge réelle."""
+    global _horloge
+    _horloge = fn
 
 
 def iso(dt: datetime | None = None) -> str:

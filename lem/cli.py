@@ -143,7 +143,9 @@ def cmd_noter(args) -> None:
 
     ctx = _ctx(args)
     n = noter(ctx.con, args.modele, args.limite)
-    print(f"{n} réponses notées.")
+    if n:
+        ctx.carte.rejouer()
+    print(f"{n} réponses notées." + (" Carte de connaissance rejouée." if n else ""))
 
 
 def cmd_nettoyer(args) -> None:
@@ -161,8 +163,8 @@ def cmd_rebuild(args) -> None:
 
     ctx = _ctx(args)
     n = scheduler.reconstruire(ctx.con)
-    ctx.carte.recalculer_tout()
-    print(f"{n} traces FSRS reconstruites ; carte recalculée.")
+    k = ctx.carte.rejouer()
+    print(f"{n} traces FSRS reconstruites ; carte de connaissance rejouée ({k} observations).")
 
 
 def cmd_atlas(args) -> None:

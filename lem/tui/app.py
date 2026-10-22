@@ -1003,7 +1003,9 @@ class EcranNoter(Screen):
         self.app.call_from_thread(log.write, Text(f"modèle : {modele}", style=GRIS))
         try:
             n = noter(con, modele, journal=lambda m: self.app.call_from_thread(log.write, m))
-            self.app.call_from_thread(log.write, Text(f"\n{n} réponses notées. FSRS rejoué.", style=f"bold {BLANC}"))
+            if n:
+                self.app.call_from_thread(self.app.ctx.carte.rejouer)
+            self.app.call_from_thread(log.write, Text(f"\n{n} réponses notées. FSRS et carte rejoués.", style=f"bold {BLANC}"))
         except FileNotFoundError:
             self.app.call_from_thread(log.write, Text("commande `claude` introuvable — installe Claude Code.", style="#ff5f5f"))
         finally:

@@ -411,16 +411,15 @@ class PartieBombe:
             retour.message = "Cible trouvée !"
             retour.points += 5
             self.historique.append(True)
-            self.carte.observer(eid, 1.0)
-            ecrire(self.con, self.session_id, Evenement("bombe", "reponse", entree_id=eid, trace="prod",
-                                                        reponse=texte, correct=True, note_auto=3,
-                                                        latence_ms=latence_ms, frappe=frappe or Frappe(),
-                                                        data={**base, "fsrs": trace_existe, "cible_trouvee": True}))
+            ev = ecrire(self.con, self.session_id, Evenement("bombe", "reponse", entree_id=eid, trace="prod",
+                                                             reponse=texte, correct=True, note_auto=3,
+                                                             latence_ms=latence_ms, frappe=frappe or Frappe(),
+                                                             data={**base, "fsrs": trace_existe, "cible_trouvee": True}))
+            self.carte.observer(eid, 1.0, source="bombe:cible", evenement_id=ev)
             self._adapter()
             self.invite = self.nouvelle_invite()
         else:
             # Production spontanée : preuve de vocabulaire actif (sans planification FSRS).
-            self.carte.observer(eid, 1.0, poids=0.5)
             data = {**base, "spontane": True}
             if inv.cible_id is not None:
                 comp = comparer(self.con, inv.cible_id, eid, self.magasin)
@@ -430,9 +429,10 @@ class PartieBombe:
                              "sim_sens": None if comp.sens is None else round(comp.sens, 3)})
                 if comp.proximite in (Proximite.JUMEAU, Proximite.FORME, Proximite.SENS):
                     enregistrer_confusion(self.con, inv.cible_id, eid, 0.5)
-            ecrire(self.con, self.session_id, Evenement("bombe", "reponse", entree_id=eid, trace="prod",
-                                                        reponse=texte, correct=True, latence_ms=latence_ms,
-                                                        frappe=frappe or Frappe(), data=data))
+            ev = ecrire(self.con, self.session_id, Evenement("bombe", "reponse", entree_id=eid, trace="prod",
+                                                             reponse=texte, correct=True, latence_ms=latence_ms,
+                                                             frappe=frappe or Frappe(), data=data))
+            self.carte.observer(eid, 1.0, poids=0.5, source="bombe:spontane", evenement_id=ev)
             retour.revelation = self._apres_echec_cible(texte)
         retour.trouvaille = trouvailles(self.con, eid)
         self.score += retour.points
@@ -487,11 +487,11 @@ class PartieBombe:
         rev = None
         if inv.n_solutions <= self.params.get("revelation_max", 30):
             self.historique.append(False)
-            self.carte.observer(inv.cible_id, 0.4, poids=0.3)
             d = self.con.execute("SELECT definition FROM sens WHERE entree_id = ? ORDER BY rang LIMIT 1",
                                  (inv.cible_id,)).fetchone()
-            ecrire(self.con, self.session_id, Evenement("bombe", "revelation", entree_id=inv.cible_id,
-                                                        data={"suite": inv.suite, "donnes": inv.donnes}))
+            ev = ecrire(self.con, self.session_id, Evenement("bombe", "revelation", entree_id=inv.cible_id,
+                                                             data={"suite": inv.suite, "donnes": inv.donnes}))
+            self.carte.observer(inv.cible_id, 0.4, poids=0.3, source="bombe:revelation", evenement_id=ev)
             rev = (inv.cible_forme, d["definition"] if d else "")
         self._adapter()
         self.invite = self.nouvelle_invite()

@@ -13,7 +13,9 @@ Modèle de type Rasch / Elo, entièrement déterministe et explicable :
 * résidu : ce qui est propre au mot lui-même, une fois qu'il a été observé.
 
 Mise à jour en ligne façon Elo : θ_d += lr_d · (y − p), avec un pas qui décroît
-avec le nombre d'observations. Tout est rejouable depuis le journal.
+avec le nombre d'observations. Chaque observation est écrite dans la table `observation` ;
+`rejouer` reconstruit θ, résidus et P à partir de zéro, en prenant pour chaque observation
+issue d'une note la meilleure note disponible (une définition rejugée par Claude corrige la carte).
 """
 
 from __future__ import annotations
@@ -25,7 +27,7 @@ from dataclasses import asdict, dataclass
 
 import numpy as np
 
-from lem.db import get_reglage, iso, set_reglage
+from lem.db import get_reglage, iso, now, set_reglage
 
 # Pas d'apprentissage de base par famille de dimension, et constante de décroissance.
 LR = {"global": 0.03, "zipf": 0.08, "origine": 0.15, "type": 0.15, "domaine": 0.2, "morph": 0.3}
@@ -260,8 +262,26 @@ class CarteConnaissance:
         return self._nobs.get(entree_id, 0)
 
     # -- écriture ---------------------------------------------------------
-    def observer(self, entree_id: int, y: float, poids: float = 1.0, persister: bool = True) -> float:
-        """Intègre une observation y ∈ [0, 1] (1 = connu). Renvoie le nouveau P."""
+    def observer(self, entree_id: int, y: float | None, poids: float = 1.0, persister: bool = True, *,
+                 source: str = "", evenement_id: int | None = None, depuis_note: bool = False) -> float:
+        """Intègre une observation y ∈ [0, 1] (1 = connu), l'écrit au journal. Renvoie le nouveau P.
+
+        depuis_note : y vient de la note de `evenement_id` ; au rejeu, la meilleure note disponible la remplace.
+        y = None (avec depuis_note) : observation en attente, appliquée au rejeu une fois la réponse notée."""
+        if persister:
+            self.con.execute(
+                "INSERT INTO observation(ts, evenement_id, entree_id, y, poids, source, depuis_note) VALUES(?, ?, ?, ?, ?, ?, ?)",
+                (iso(now()), evenement_id, entree_id, y, poids, source, int(depuis_note)))
+        if y is None:
+            if persister:
+                self.con.commit()
+            return self.p(entree_id)
+        nouveau = self._appliquer(entree_id, y, poids)
+        if persister:
+            self._persister(entree_id, nouveau)
+        return nouveau
+
+    def _appliquer(self, entree_id: int, y: float, poids: float) -> float:
         p = self.p(entree_id)
         err = (y - p) * poids
         for d in self.dimensions(entree_id):
@@ -275,10 +295,39 @@ class CarteConnaissance:
         self._version += 1
         if self._vec is not None and (k := self._vec["pos"].get(entree_id)) is not None:
             self._vec["residu"][k] = self._residu[entree_id]
-        nouveau = self.p(entree_id)
-        if persister:
-            self._persister(entree_id, nouveau)
-        return nouveau
+        return self.p(entree_id)
+
+    def rejouer(self) -> int:
+        """Reconstruit la carte depuis la table `observation` (θ, résidus, n_obs, P). Renvoie le nombre rejoué."""
+        from lem.memory.scheduler import note_finale
+
+        rows = self.con.execute(
+            """SELECT o.entree_id, o.y, o.poids, o.depuis_note, o.evenement_id, e.note_auto FROM observation o
+               LEFT JOIN evenement e ON e.id = o.evenement_id ORDER BY o.ts, o.id""").fetchall()
+        self.theta.clear()
+        self.n_theta.clear()
+        self._residu = {k: 0.0 for k in self._residu}
+        self._nobs = {k: 0 for k in self._nobs}
+        if self._vec is not None:
+            self._vec["residu"][:] = 0.0
+        for r in rows:
+            y = r["y"]
+            if r["depuis_note"] and r["evenement_id"] is not None:
+                n = note_finale(self.con, r["evenement_id"], r["note_auto"])
+                if n is not None:
+                    y = Y_PAR_NOTE[n]
+            if y is not None:
+                self._appliquer(r["entree_id"], y, r["poids"])
+        self._version += 1
+        maj = iso()
+        self.con.execute("DELETE FROM theta")
+        self.con.executemany("INSERT INTO theta(dimension, valeur, n_obs, maj) VALUES(?, ?, ?, ?)",
+                             ((d, v, self.n_theta[d], maj) for d, v in self.theta.items()))
+        self.con.execute("UPDATE connaissance SET residu = 0, n_obs = 0 WHERE n_obs != 0 OR residu != 0")
+        self.con.executemany("UPDATE connaissance SET residu = ?, n_obs = ? WHERE entree_id = ?",
+                             ((self._residu[e], n, e) for e, n in self._nobs.items() if n))
+        self.recalculer_tout()
+        return len(rows)
 
     def _persister(self, entree_id: int, p: float) -> None:
         maj = iso()
@@ -296,12 +345,11 @@ class CarteConnaissance:
         self.con.commit()
 
     def recalculer_tout(self) -> None:
-        """Propage les θ à tout le lexique (fin de session) : p_connu de chaque entrée."""
+        """Propage les θ à tout le lexique (fin de session) : p_connu de chaque entrée (vectorisé)."""
         maj = iso()
-        self.con.executemany(
-            "UPDATE connaissance SET p_connu = ?, maj = ? WHERE entree_id = ?",
-            ((self.p(eid), maj, eid) for eid in list(self._prior)),
-        )
+        ids, p = self.ids, self.p_tous()
+        self.con.executemany("UPDATE connaissance SET p_connu = ?, maj = ? WHERE entree_id = ?",
+                             zip(p.tolist(), (maj for _ in range(len(ids))), ids.tolist()))
         self.con.commit()
 
     def remettre_a_zero(self) -> None:
