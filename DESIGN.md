@@ -190,8 +190,9 @@ mot étranger, nom propre, lettres rares, diacritiques non français, composés.
 *kjökkenmödding*, *chlorfenvinphos*, *pouligny-saint-pierre*, *midshipmen*. On y mêle les mots
 « presque acquis » des autres jeux.
 
-**Imagerie** : à la première apparition d'un mot, tu écris ton image mentale, ou tu la dictes (la
-dictée macOS marche dans tout champ de texte). En mode **expérience**, un mot sur deux seulement est
+**Imagerie** : à la première apparition d'un mot, un champ s'ouvre pour ton image mentale. lem
+n'embarque pas de dictée : ta propre dictée Whisper (F8 sous Windows, Option droite sous macOS) écrit
+dans le champ. La saisie dictée est repérée (insertion d'un bloc) et marquée `mode_saisie = dictee`. En mode **expérience**, un mot sur deux seulement est
 imagé, de façon déterministe : sur tes propres données, on pourra mesurer si l'imagerie t'aide au
 jeu. Le dessin à la souris (canevas braille dans Textual) est faisable dans une version suivante.
 

@@ -85,3 +85,38 @@ def test_profil_et_risque(con):
     assert "consonne_double" in motifs("occurrence") and "grec" in motifs("rythme")
     prof = profil(con)
     assert 0 < risque("occurrence", prof) < 1
+
+
+def test_dictee_reperee_et_jamais_comptee_comme_faute(con, carte, rng):
+    from lem.journal import Frappe, nettoyer_saisie
+
+    assert Frappe(None, 0, 0, 1).mode == "dictee" and Frappe(None, 8, 1, 0).mode == "clavier"
+    assert nettoyer_saisie(" Acronyme. ") == "Acronyme"
+    p = {**REGISTRE["cartes"].defauts(), "nouveaux": 4, "exercice": "prod", "confusables": False}
+    partie = PartieCartes(con, p, carte, rng=rng)
+    it = partie.suivant()
+    faute = it.forme[0] + it.forme[2:]
+    res = partie.repondre(it, faute + ".", 2500, Frappe(300, 0, 0, 1))      # Whisper a mal écrit
+    assert res.correct and res.prod.mode == "dicte" and not res.fautes
+    assert con.execute("SELECT mode_saisie FROM evenement WHERE id = ?", (res.evenement_id,)).fetchone()[0] == "dictee"
+    assert not con.execute("SELECT 1 FROM evenement WHERE trace = 'ortho'").fetchone()
+    g = partie._item("graphie", it.entree_id)
+    with pytest.raises(ValueError):
+        partie.repondre(g, it.forme, 900, Frappe(100, 0, 0, 1))
+
+
+def test_migration_colonne_mode_saisie(tmp_path):
+    import sqlite3
+
+    from lem.db import connect
+
+    chemin = tmp_path / "ancienne.sqlite"
+    vieille = sqlite3.connect(chemin)
+    vieille.execute("CREATE TABLE evenement (id INTEGER PRIMARY KEY, ts TEXT NOT NULL, session_id INTEGER, "
+                    "jeu TEXT NOT NULL, type TEXT NOT NULL, entree_id INTEGER, sens_id INTEGER, trace TEXT, "
+                    "reponse TEXT, correct INTEGER, note_auto INTEGER, latence_ms INTEGER, premiere_frappe_ms INTEGER, "
+                    "frappes INTEGER, effacements INTEGER, data TEXT NOT NULL DEFAULT '{}')")
+    vieille.commit()
+    vieille.close()
+    con = connect(chemin)
+    assert "mode_saisie" in {r[1] for r in con.execute("PRAGMA table_info(evenement)")}

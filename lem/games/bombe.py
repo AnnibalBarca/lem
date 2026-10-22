@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from lem.confusables import IndexFormel
 from lem.games.base import PARAMS_FILTRES, Jeu, Param, enregistrer, filtres_depuis
 from lem.games.pool import selectionner
-from lem.journal import Evenement, Frappe, ecrire
+from lem.journal import Evenement, Frappe, ecrire, nettoyer_saisie
 from lem.memory.knowledge import CarteConnaissance, score_apprentissage
 from lem.orthographe import Diagnostic, diagnostiquer, enregistrer_faute
 from lem.similarite import Comparaison, Proximite, comparer, enregistrer_confusion
@@ -258,12 +258,13 @@ class PartieBombe:
         return diagnostiquer(self.con, texte, self.invite.cible_id, self._candidats[suite])
 
     def repondre(self, texte: str, latence_ms: int, frappe: Frappe | None = None) -> Retour:
+        texte = nettoyer_saisie(texte)
         inv = self.invite
         cle, ids = self._valider(texte)
         suite_ok = inv.suite in normaliser(texte)
         base = {"suite": inv.suite, "cible": inv.cible_forme, "k": round(inv.k, 2), "n": inv.n_solutions,
                 "repetitions_restantes": inv.repetitions, "fsrs": False}
-        if cle and suite_ok and not ids and cle not in self.utilises:
+        if cle and suite_ok and not ids and cle not in self.utilises and not (frappe and frappe.dictee):
             diag = self._diagnostic(texte)
             if diag:
                 enregistrer_faute(self.con, self.session_id, "bombe", diag, latence_ms, frappe)

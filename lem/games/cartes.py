@@ -26,7 +26,7 @@ from lem.db import iso, now
 from lem.games.base import PARAMS_FILTRES, Jeu, Param, enregistrer, filtres_depuis
 from lem.games.pool import selectionner
 from lem.grading.direct import VerdictProd, VerdictRecep, noter_prod, noter_recep
-from lem.journal import Evenement, Frappe, ajouter_notation, ecrire
+from lem.journal import Evenement, Frappe, ajouter_notation, ecrire, nettoyer_saisie
 from lem.memory import scheduler
 from lem.memory.knowledge import Y_PAR_NOTE, CarteConnaissance, score_apprentissage
 from lem.orthographe import Diagnostic, diagnostiquer, enregistrer_faute
@@ -189,9 +189,14 @@ class PartieCartes:
 
     def repondre(self, it: Item, texte: str, latence_ms: int, frappe: Frappe | None = None) -> Resultat:
         frappe = frappe or Frappe()
+        if it.exercice in ("prod", "graphie"):
+            texte = nettoyer_saisie(texte)
+        if it.exercice == "graphie" and frappe.dictee:
+            raise ValueError("la graphie se tape au clavier : une dictée écrit à ta place")
         sens = [(r["id"], r["definition"]) for r in
                 self.con.execute("SELECT id, definition FROM sens WHERE entree_id = ? ORDER BY rang", (it.entree_id,))]
-        data = {"exercice": it.exercice, "voisins": it.voisins, "indices": it.indices, "nouveau": it.nouveau}
+        data = {"exercice": it.exercice, "voisins": it.voisins, "indices": it.indices, "nouveau": it.nouveau,
+                "saisie": frappe.mode}
         recep = prod = None
         fautes: list[Diagnostic] = []
         if it.exercice == "graphie":
@@ -211,6 +216,9 @@ class PartieCartes:
             trace = "recep"
         elif it.exercice == "prod":
             prod = noter_prod(self.con, it.entree_id, texte, self.magasin_entrees)
+            if frappe.dictee and prod.mode == "graphie":
+                # Mot retrouvé ; la graphie est celle de Whisper, pas la tienne : ni faute, ni preuve.
+                prod = VerdictProd(True, "dicte", it.entree_id, None, 3)
             note, correct = prod.note_auto, prod.correct
             if correct and it.indices:
                 note = min(note, 2 if it.indices <= len(it.forme) // 3 else 1)
@@ -230,7 +238,7 @@ class PartieCartes:
             data.update({"options": [o[1] for o in it.options], "choisi": choisi})
             trace = "prod"
             data["fsrs"] = False   # un duel informe la carte de connaissance, pas FSRS
-        if recep:
+        if recep and not frappe.dictee:              # fautes d'une dictée = fautes de Whisper
             fautes += recep.fautes
         eid = ecrire(self.con, self.session_id, Evenement(
             "cartes", "reponse", entree_id=it.entree_id, sens_id=0 if trace == "ortho" else it.sens_id, trace=trace,

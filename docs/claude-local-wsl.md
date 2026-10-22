@@ -15,8 +15,8 @@ PC Windows, via WSL2**, et me rendre un rapport chiffré. Lis d'abord `README.md
   `~/.lem/`. Jamais sous `/mnt/c/…`, où SQLite et les lectures massives sont très lents.
 - L'interface se lance dans **Windows Terminal**, pas dans l'ancienne console : rendu des caractères de
   boîte, couleurs 24 bits, police Cascadia Mono ou une autre police à chasse fixe complète.
-- Pour la dictée des images mentales (Mémoire verbale), c'est **Win + H** sous Windows ; elle tape dans
-  le champ de saisie du terminal.
+- J'ai ma propre dictée Whisper (F8). lem n'en embarque pas : ne lui en ajoute pas, et vérifie que
+  rien dans l'interface n'intercepte F8.
 
 ## Étapes
 

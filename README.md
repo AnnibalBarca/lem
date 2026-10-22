@@ -36,6 +36,11 @@ ta mémoire.
 montrée lettre par lettre en jaune, et le mot doit être retapé juste. Il revient ensuite trois cartes
 plus loin, puis à intervalles espacés, sur une trace FSRS dédiée.
 
+**Dictée.** lem n'embarque pas de dictée : ta propre dictée (Whisper, F8 sous Windows, Option droite
+sous macOS) écrit dans les champs comme un clavier. lem repère la saisie dictée (insertion d'un bloc)
+et en tient compte : la graphie et le recopiage se tapent au clavier, une faute écrite par la dictée
+n'est jamais comptée comme la tienne, et les temps de réponse sont séparés (clavier / dictée).
+
 Dans tous les jeux : `/aide`, `/domaine science,droit`, `/etat flous`, `/vies 5`, `/mode confusables`, `/params`…
 Les réglages sont enregistrés dans la base.
 

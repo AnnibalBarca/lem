@@ -5,9 +5,8 @@ Le vivier puise dans les régions les plus étranges du lexique : noms propres, 
 étrangers, termes techniques rarissimes, composés (kjøkkenmødding, chlorfenvinphos,
 pouligny-saint-pierre, midshipmen…), mêlés aux mots « presque acquis » des autres jeux.
 
-Imagerie : à la première apparition d'un mot, tu peux écrire (ou dicter : la dictée
-macOS marche dans tout champ de texte) l'image mentale que tu fabriques. Elle rejoint la
-table mnemo. En mode « expérience », un mot sur deux seulement est imagé — de façon
+Imagerie : à la première apparition d'un mot, un champ s'ouvre pour l'image mentale que tu
+fabriques (au clavier ou avec ta propre dictée Whisper). Elle rejoint la table mnemo. En mode « expérience », un mot sur deux seulement est imagé — de façon
 déterministe — ce qui permet de mesurer, sur TES données, l'effet de l'imagerie.
 """
 

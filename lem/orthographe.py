@@ -249,7 +249,8 @@ def profil(con: sqlite3.Connection) -> dict[str, tuple[int, int]]:
     fautes, occasions = Counter(), Counter()
     for forme, data in con.execute(
         """SELECT e.forme, ev.data FROM evenement ev JOIN entree e ON e.id = ev.entree_id
-           WHERE ev.type = 'reponse' AND ev.trace IN ('prod', 'ortho') AND ev.reponse IS NOT NULL"""
+           WHERE ev.type = 'reponse' AND ev.trace IN ('prod', 'ortho') AND ev.reponse IS NOT NULL
+             AND COALESCE(ev.mode_saisie, 'clavier') = 'clavier'"""
     ):
         for m in motifs(forme):
             occasions[m] += 1

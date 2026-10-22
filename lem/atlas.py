@@ -135,10 +135,12 @@ def rapport(con: sqlite3.Connection) -> Text:
 
     # 7. Vitesse
     _titre(t, "VITESSE — latence médiane")
-    for jeu, in con.execute("SELECT DISTINCT jeu FROM evenement WHERE type = 'reponse'"):
-        lats = [r[0] for r in con.execute(
-            "SELECT latence_ms FROM evenement WHERE jeu = ? AND type = 'reponse' AND latence_ms IS NOT NULL", (jeu,))]
-        if lats:
-            t.append(f"  {jeu:<14}{statistics.median(lats) / 1000:5.1f} s", style=BLANC)
-            t.append(f"   ({len(lats)} réponses)\n", style=GRIS)
+    groupes: dict[tuple[str, str], list[int]] = {}
+    for jeu, mode, lat in con.execute(
+            "SELECT jeu, COALESCE(mode_saisie, 'clavier'), latence_ms FROM evenement "
+            "WHERE type = 'reponse' AND latence_ms IS NOT NULL"):
+        groupes.setdefault((jeu, mode), []).append(lat)
+    for (jeu, mode), lats in sorted(groupes.items()):
+        t.append(f"  {jeu:<14}{statistics.median(lats) / 1000:5.1f} s", style=BLANC)
+        t.append(f"   {mode} · {len(lats)} réponses\n", style=GRIS)
     return t

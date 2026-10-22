@@ -21,6 +21,18 @@ class Frappe:
     premiere_frappe_ms: int | None = None
     frappes: int = 0
     effacements: int = 0
+    blocs: int = 0                  # insertions de plusieurs caractères d'un coup (dictée, collage)
+
+    @property
+    def mode(self) -> str:
+        """clavier | dictee | mixte. La dictée (Whisper) écrit à ta place : ce n'est pas TA graphie."""
+        if not self.blocs:
+            return "clavier"
+        return "dictee" if self.frappes <= 2 else "mixte"
+
+    @property
+    def dictee(self) -> bool:
+        return self.mode != "clavier"
 
 
 @dataclass
@@ -37,6 +49,11 @@ class Evenement:
     frappe: Frappe = field(default_factory=Frappe)
     data: dict[str, Any] = field(default_factory=dict)
     ts: datetime | None = None
+
+
+def nettoyer_saisie(texte: str) -> str:
+    """Retire ce qu'ajoute une dictée autour d'un mot isolé : espaces, ponctuation finale, guillemets."""
+    return texte.strip().strip("«»\"'“”").strip().rstrip(".!?…;:,").strip()
 
 
 def ouvrir_session(con: sqlite3.Connection, jeu: str, params: dict, contexte: dict | None = None) -> int:
@@ -57,8 +74,8 @@ def fermer_session(con: sqlite3.Connection, session_id: int) -> None:
 def ecrire(con: sqlite3.Connection, session_id: int | None, ev: Evenement) -> int:
     eid = con.execute(
         """INSERT INTO evenement(ts, session_id, jeu, type, entree_id, sens_id, trace, reponse,
-               correct, note_auto, latence_ms, premiere_frappe_ms, frappes, effacements, data)
-           VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               correct, note_auto, latence_ms, premiere_frappe_ms, frappes, effacements, mode_saisie, data)
+           VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             iso(ev.ts or now()),
             session_id,
@@ -74,6 +91,7 @@ def ecrire(con: sqlite3.Connection, session_id: int | None, ev: Evenement) -> in
             ev.frappe.premiere_frappe_ms,
             ev.frappe.frappes,
             ev.frappe.effacements,
+            ev.frappe.mode if (ev.frappe.frappes or ev.frappe.blocs) else None,
             dumps(ev.data),
         ),
     ).lastrowid

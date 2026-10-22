@@ -42,9 +42,18 @@ def connect(path: str | Path | None = None) -> sqlite3.Connection:
     return con
 
 
+# Colonnes ajoutées après coup : (table, colonne, type). Appliquées aux bases existantes.
+MIGRATIONS = [("evenement", "mode_saisie", "TEXT")]
+
+
 def init_schema(con: sqlite3.Connection) -> None:
     sql = resources.files("lem.db").joinpath("schema.sql").read_text(encoding="utf-8")
     con.executescript(sql)
+    for table, colonne, type_ in MIGRATIONS:
+        cols = {r[1] for r in con.execute(f"PRAGMA table_info({table})")}
+        if colonne not in cols:
+            con.execute(f"ALTER TABLE {table} ADD COLUMN {colonne} {type_}")
+    con.commit()
 
 
 def dumps(obj: Any) -> str:

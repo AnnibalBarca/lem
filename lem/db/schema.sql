@@ -141,6 +141,7 @@ CREATE TABLE IF NOT EXISTS evenement (
     premiere_frappe_ms INTEGER,                    -- stimulus → première touche
     frappes            INTEGER,
     effacements        INTEGER,
+    mode_saisie        TEXT,                       -- clavier | dictee | mixte (dictée Whisper ou collage détectés)
     data               TEXT NOT NULL DEFAULT '{}'  -- json : candidats montrés, similarités, étiquettes…
 );
 CREATE INDEX IF NOT EXISTS idx_evenement_entree ON evenement(entree_id, trace);

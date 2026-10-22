@@ -30,7 +30,10 @@ from lem.tui.theme import BLANC, CSS, GRIS, PROXIMITES, SOMBRE, barre, thermomet
 
 
 class Chrono:
-    """Mesure une réponse : latence, première frappe, frappes, effacements."""
+    """Mesure une réponse : latence, première frappe, frappes, effacements, dictée.
+
+    Ta dictée (Whisper, F8 / Option droite) insère le texte d'un bloc : on le repère pour ne
+    pas confondre ses mesures avec celles de la frappe, ni ses fautes avec les tiennes."""
 
     def __init__(self):
         self.reset()
@@ -40,13 +43,17 @@ class Chrono:
         self.premiere: float | None = None
         self.frappes = 0
         self.effacements = 0
+        self.blocs = 0
         self._long = 0
 
     def changement(self, valeur: str) -> None:
         if valeur and self.premiere is None:
             self.premiere = time.monotonic()
-        if len(valeur) < self._long:
+        delta = len(valeur) - self._long
+        if delta < 0:
             self.effacements += 1
+        elif delta >= 4:
+            self.blocs += 1
         else:
             self.frappes += 1
         self._long = len(valeur)
@@ -54,7 +61,7 @@ class Chrono:
     def mesures(self) -> tuple[int, Frappe]:
         lat = int((time.monotonic() - self.t0) * 1000)
         pf = None if self.premiere is None else int((self.premiere - self.t0) * 1000)
-        return lat, Frappe(pf, self.frappes, self.effacements)
+        return lat, Frappe(pf, self.frappes, self.effacements, self.blocs)
 
 
 LIBELLES_FAUTE = {"accent": "accent", "consonne_double": "consonne double", "h_muet": "h muet",
@@ -299,7 +306,7 @@ class EcranPartie(Screen):
         self.query_one(f"#{id_}", Static).update(contenu)
 
     def on_input_changed(self, ev: Input.Changed) -> None:
-        if not ev.value.startswith("/"):
+        if ev.value and not ev.value.startswith("/"):     # "" = champ vidé par le programme
             self.chrono.changement(ev.value)
 
     def commande(self, texte: str) -> bool:
@@ -401,6 +408,9 @@ class EcranCartes(EcranPartie):
         ev.input.value = ""
         if self.resultat is None:
             lat, frappe = self.chrono.mesures()
+            if self.item.exercice == "graphie" and frappe.dictee:
+                self._clavier_exige()
+                return
             self.resultat = self.partie.repondre(self.item, texte, lat, frappe)
             self.recopies = list(dict.fromkeys(d.correcte for d in self.resultat.fautes))
             self._reveler()
@@ -423,8 +433,15 @@ class EcranCartes(EcranPartie):
         else:
             saisie.placeholder = "1–4, ou Entrée"
 
+    def _clavier_exige(self) -> None:
+        self.maj("retour", Text("✎ la graphie se tape au clavier — une dictée écrit à ta place", style=f"bold {GRAPHIE}"))
+        self.chrono.reset()
+
     def _recopie(self, texte: str) -> None:
-        lat, _ = self.chrono.mesures()
+        lat, frappe = self.chrono.mesures()
+        if frappe.dictee:
+            self._clavier_exige()
+            return
         attendu = self.recopies[0]
         ok = self.partie.recopier(self.resultat, attendu, texte, lat)
         if ok:
@@ -649,7 +666,7 @@ class EcranMemoire(EcranPartie):
             self.attente_image = tour.entree_id
             champ = self.query_one("#saisie", Input)
             champ.display = True
-            champ.placeholder = f"ton image mentale pour « {tour.forme} » (écris ou dicte) — Entrée pour passer"
+            champ.placeholder = f"ton image mentale pour « {tour.forme} » — Entrée pour passer"
             champ.focus()
             return
         self._suivant()
