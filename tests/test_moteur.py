@@ -236,3 +236,13 @@ def test_rejeu_prend_la_meilleure_note(con, carte):
     c2.rejouer()
     assert c2.p(a) < p_haut
     assert c2.n_obs(eid(con, "sigle")) == 1
+
+
+def test_revision_d_un_mot_etudie_ne_propage_pas(con, carte):
+    """Une révision réussie corrige le mot, pas toute sa famille ; une sonde, si."""
+    a, voisin = eid(con, "acronyme"), eid(con, "paronyme")
+    avant = carte.p(voisin)
+    carte.observer(a, 1.0, propager=False)
+    assert carte.p(voisin) == pytest.approx(avant)
+    carte.observer(a, 1.0, propager=True)
+    assert carte.p(voisin) > avant

@@ -339,7 +339,7 @@ class CarteConnaissance:
         self.con.executemany(
             """INSERT INTO theta(dimension, valeur, n_obs, maj) VALUES(?, ?, ?, ?)
                ON CONFLICT(dimension) DO UPDATE SET valeur = excluded.valeur, n_obs = excluded.n_obs, maj = excluded.maj""",
-            ((d, self.theta[d], self.n_theta[d], maj) for d in self.dimensions(entree_id)),
+            ((d, self.theta[d], self.n_theta[d], maj) for d in self.dimensions(entree_id) if d in self.theta),
         )
         self.con.execute(
             """INSERT INTO connaissance(entree_id, p_prior, p_connu, residu, n_obs, maj) VALUES(?, ?, ?, ?, ?, ?)
