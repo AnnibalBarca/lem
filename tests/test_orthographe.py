@@ -120,3 +120,14 @@ def test_migration_colonne_mode_saisie(tmp_path):
     vieille.close()
     con = connect(chemin)
     assert "mode_saisie" in {r[1] for r in con.execute("PRAGMA table_info(evenement)")}
+
+
+def test_profil_avec_graphie_juste(con):
+    """Une carte de graphie réussie écrit « "graphie": null » : l'Atlas ne doit pas planter (vraie base)."""
+    from lem.journal import Evenement, ecrire
+    from lem.orthographe import profil
+
+    a = con.execute("SELECT id FROM entree WHERE forme = 'acronyme'").fetchone()[0]
+    ecrire(con, None, Evenement("cartes", "reponse", entree_id=a, trace="ortho", reponse="acronyme", correct=True,
+                                data={"exercice": "graphie", "graphie": None}))
+    assert sum(occ for _, occ in profil(con).values()) >= 1

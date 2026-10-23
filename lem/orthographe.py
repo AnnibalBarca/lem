@@ -293,10 +293,10 @@ def profil(con: sqlite3.Connection) -> dict[str, tuple[int, int]]:
     ):
         for m in motifs(forme):
             occasions[m] += 1
-        if '"graphie"' in data:
-            for t in json.loads(data)["graphie"].get("types", []):
-                if t in TYPE_VERS_MOTIF:
-                    fautes[TYPE_VERS_MOTIF[t]] += 1
+        # Une graphie juste écrit « "graphie": null » : seules les fautes ont des types.
+        for t in (json.loads(data).get("graphie") or {}).get("types", []):
+            if t in TYPE_VERS_MOTIF:
+                fautes[TYPE_VERS_MOTIF[t]] += 1
     return {m: (fautes[m], occasions[m]) for m in MOTIFS}
 
 
