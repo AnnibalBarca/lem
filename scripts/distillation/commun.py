@@ -26,10 +26,20 @@ RE_PREFIXE = re.compile(r"^(?:re|ré|anti|supra|social|semi|sur|sous|non|néo|au
 
 
 def lire_jsonl(chemin: Path) -> list[dict]:
+    """Lit un fichier JSONL. Une coupure de courant peut laisser une DERNIÈRE ligne incomplète (ou des octets
+    nuls) : elle est ignorée. Une ligne illisible au milieu reste une erreur (les identifiants en dépendent)."""
     if not chemin.exists():
         return []
     with open(chemin, encoding="utf-8") as f:
-        return [json.loads(ligne) for ligne in f if ligne.strip()]
+        lignes = [ligne for ligne in (x.replace("\x00", "") for x in f) if ligne.strip()]
+    out = []
+    for i, ligne in enumerate(lignes):
+        try:
+            out.append(json.loads(ligne))
+        except json.JSONDecodeError:
+            if i < len(lignes) - 1:
+                raise
+    return out
 
 
 def ajouter_jsonl(chemin: Path, objets) -> None:
