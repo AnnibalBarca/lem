@@ -2,6 +2,11 @@
 
 Paste as-is into Claude Code, started **inside WSL2** in `~/lem` (Windows Terminal).
 
+Shortest way: start Claude Code in `~/lem` and paste one line:
+
+> Run `git fetch origin && git checkout local/moteur && git pull`, then read `docs/claude-local-pc.md` and
+> do everything it says, starting with Part 1.
+
 ---
 
 You are the **PC session** of **lem** (https://github.com/AnnibalBarca/lem), a French vocabulary-learning
@@ -20,9 +25,33 @@ Machine: 16 logical cores, 15 GiB RAM in WSL, RTX 5070 Ti 16 GB visible in WSL, 
 side reachable at `localhost` (mirrored networking), bge-m3 and qwen3:8b pulled. The real database is
 `~/.lem/lem.sqlite` (≈ 2.7 GB).
 
+## Working in parallel with the cloud session
+
+A cloud Claude Code session keeps working on the code at the same time as you. It only has the demo
+database; **you are the only one who sees the real data**, so your reports are how it learns what the
+real base looks like. To avoid stepping on each other:
+
+- **Branches.**
+  - The cloud session owns `local/moteur`, the integration branch. Never push to it, and never push to
+    `main`.
+  - You push Part 1 to `local/pc` (from `local/moteur`) and Part 2 to `local/distillation` (from
+    `local/moteur`). The cloud session merges them.
+  - Before every push: `git fetch origin && git rebase origin/local/moteur`, then run the tests again.
+- **Files the cloud session is changing right now:** `lem/games/bombe.py`, `lem/games/memoire_verbale.py`,
+  `lem/memory/`, `lem/tui/app.py`, `lem/db/schema.sql`, `lem/db/__init__.py`.
+  - Avoid editing them.
+  - If a fix there is unavoidable, keep it minimal, put it in a single commit, and explain it in the
+    commit message and the report.
+  - New files of your own (`lem/grading/distille.py`, scripts, tests) are fine.
+- **Schema.** Do not change the schema. Schema changes come from the cloud session and are additive only
+  (`CREATE TABLE IF NOT EXISTS`, column `MIGRATIONS`), so the real database keeps opening with any later
+  version of the code.
+- **Push your reports early.** Push `docs/rapport-pc-moteur.md` as soon as the before/after numbers exist,
+  even if the rest is still in progress.
+
 ## Part 1 — Real database on engine v2
 
-1. **Sync the code.** In `~/lem`: `git fetch origin`, check out `local/moteur`, then
+1. **Sync the code.** In `~/lem`: `git fetch origin`, check out `local/moteur`, create `local/pc` from it, then
    `uv pip install -e ".[dev]" && .venv/bin/pytest` — everything must pass. Reinstall the command
    (`uv tool install -e . --force`).
 2. **Back up first.** lem closed. Make a consistent copy with
@@ -57,7 +86,20 @@ side reachable at `localhost` (mirrored networking), bge-m3 and qwen3:8b pulled.
    - Tell me the exact command to copy `~/.lem/lem.sqlite` to the Windows side (e.g. the Desktop), so I
      can AirDrop it or put it on a USB key.
    - Do not copy `~/.lem/cache/`: it rebuilds itself.
-6. Write `docs/rapport-pc-moteur.md`: before/after numbers, timings, what you fixed, what remains.
+6. **Real-data numbers for the next features** (read-only queries; put them in the report, no data
+   files in the repo):
+   - **Bomb prompts.** For every letter sequence of 2 and 3 letters that appears in valid answers (same
+     rules as `lem/games/bombe.py`: no proper nouns, no acronyms), count the distinct valid words that
+     contain it. Report:
+     - how many sequences have 1–9, 10–49, 50–99, 100–499 and 500+ solutions;
+     - 30 examples from the 1–49 band, with their solution counts.
+   - **Verbal Memory.** Report:
+     - the size of the Verbal Memory pool at `etrangete` 0.3, 0.7 and 1.0;
+     - 30 sample words from that pool;
+     - how many pool words have at least one sense with a definition.
+   - **Mnemonics.** Report the row count of `mnemo`, by `type`.
+7. Write `docs/rapport-pc-moteur.md`: before/after numbers, timings, what you fixed, the numbers from
+   step 6, what remains.
 
 ## Part 2 — Distil a local definition grader (« notre Jev »)
 
@@ -100,7 +142,10 @@ Follow `docs/passation-distillation.md`, with these updates:
 
 - Code, comments, commit messages and docs **in French**, in the repo's style; small commits; tests
   always green.
-- Never push to `main`. Push `local/moteur` fixes (Part 1) and `local/distillation` (Part 2).
+- Never push to `main` or `local/moteur`. Push Part 1 to `local/pc` and Part 2 to `local/distillation`
+  (see « Working in parallel »).
+- **Coming later, not now:** a pipeline that generates ASCII mnemonic images on the GPU. Its design is
+  still being discussed with me. Do not start it until a later prompt asks for it.
 - **Do not change the engine's behaviour** (planner, probe, FSRS settings, knowledge map) without running
   the test bench first: `lem simuler --graines 3 --eleve moyen` (and `faible`, `fort`). Compare at equal
   seeds, record the result in `docs/rapport-moteur.md`, and adopt only what increases words retained
