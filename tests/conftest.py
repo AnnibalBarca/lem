@@ -14,6 +14,15 @@ class HashSemantique(HashEmbedder):
     semantique = True
 
 
+@pytest.fixture(autouse=True)
+def cache_isole(tmp_path, monkeypatch):
+    """Les caches (index du lexique, vecteurs) des bases de test vont dans un dossier temporaire, jamais
+    dans le vrai ~/.lem/cache (constaté : 69 dossiers laissés par les tests de l'interface)."""
+    from lem import vecteurs
+
+    monkeypatch.setattr(vecteurs, "DOSSIER_CACHE", tmp_path / "cache-lem")
+
+
 @pytest.fixture
 def con():
     c = connect(":memory:")
