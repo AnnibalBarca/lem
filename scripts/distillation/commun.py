@@ -1,4 +1,4 @@
-"""Outils communs à la distillation du correcteur de définitions (cf. docs/passation-distillation.md).
+"""Outils communs à la distillation du correcteur de définitions.
 
 Les données vivent dans ~/lem-distill-data/ (jamais dans le dépôt). Chaque script écrit en JSONL au fil de
 l'eau et reprend là où il s'est arrêté : un arrêt (quota, coupure) ne perd rien.

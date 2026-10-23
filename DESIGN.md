@@ -86,7 +86,19 @@ attente dans la session, révisions dues, mots nouveaux classés, budget.
 Chaque réglage a été choisi au **banc d'essai** (`lem/simulation.py`, `lem simuler`) : un élève simulé
 dont on connaît la vérité (ce qu'il sait au départ, structuré par domaine, origine et morphème ; une
 mémoire qui oublie et se renforce comme le suppose FSRS), joué par le vrai moteur avec une horloge
-simulée. Résultats et expériences : [docs/rapport-moteur.md](docs/rapport-moteur.md).
+simulée. Mots retenus par heure un mois après, contre le moteur précédent (5 graines, élève simulé avec
+paronymes et interférence) :
+
+| Élève | Sens par heure | Mot par heure | Total | Carte (Brier) |
+|---|---|---|---|---|
+| moyen | 17,9 → 18,7 | 7,4 → 16,1 | +38 % | 0,56 → 0,08 |
+| faible | 9,1 → 12,7 | 2,3 → 10,1 | +99 % | 0,38 → 0,08 |
+| fort | 22,9 → 22,9 | 14,0 → 20,8 | +18 % | 0,64 → 0,08 |
+
+Le gain est surtout sur le mot (le retrouver à partir du sens), et la carte de ce que tu sais devient
+juste. Les étapes d'apprentissage FSRS dans la session et les duels de rappel ont été essayés et écartés
+au banc ; les duels de confusables restent (petit gain, de même sens pour les trois profils). Toute
+modification du moteur repasse par le banc : `lem simuler --graines 3 --eleve moyen` (et faible, fort).
 
 ### 1.5 Six mémoires par mot (`lem/profil.py`)
 
@@ -390,9 +402,8 @@ Tout tourne en local sur le Mac. Le seul service extérieur est Claude, en fin d
    (directe, Claude, contrat Jev).
 2. ✅ Jeux : Cartes, Bombe, Syllabaire, Mémoire verbale (entraînement, élucubrations), Mot ou pas mot,
    Étalonnage, Atlas avec les six mémoires. TUI, CLI, tests.
-3. **Ingestion réelle sur ton Mac** (`lem telecharger --ingerer`), puis `lem index` et `lem calibrer`
-   (seuils de proximité et de température mesurés sur la base réelle). Prompt prêt pour un Claude
-   Code local : `docs/claude-local.md`.
+3. **Ingestion réelle** (`lem telecharger --ingerer`), puis `lem index` et `lem calibrer` (seuils de
+   proximité et de température mesurés sur la base réelle).
 4. Étalonnage initial (environ 150 questions), puis 2 à 3 semaines de jeu.
 5. ✅ Moteur v2 : planificateur, sonde et vérification unique, carte rejouable, optimiseur FSRS par
    trace, juge Haiku en direct, banc d'essai. À valider sur ton journal réel après quelques semaines

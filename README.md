@@ -44,7 +44,7 @@ sous macOS) écrit dans les champs comme un clavier. lem repère la saisie dict�
 et en tient compte : la graphie et le recopiage se tapent au clavier, une faute écrite par la dictée
 n'est jamais comptée comme la tienne, et les temps de réponse sont séparés (clavier / dictée).
 
-**Le moteur des Cartes** ([rapport](docs/rapport-moteur.md)). La carte suivante est choisie à chaque fois :
+**Le moteur des Cartes** ([DESIGN § 1.4](DESIGN.md)). La carte suivante est choisie à chaque fois :
 * un mot nouveau est d'abord **sondé** (« le connais-tu ? » ; Entrée seule = je ne sais pas). Connu, il ne
   coûte qu'une carte et revient **une seule fois, dans 1 à 2 mois** ; sinon il est appris : duel de
   confusables quelques cartes plus loin, « sens → mot » dix cartes plus loin, puis FSRS ;
@@ -96,12 +96,7 @@ lem
 ```
 
 Sur une machine modeste, `LEM_VECTEURS=float16` divise par deux la RAM des vecteurs (≈ 1,1 Go au lieu de 2,2).
-Résultats et chiffres de la première intégration réelle : [docs/rapport-integration-wsl.md](docs/rapport-integration-wsl.md) ;
-téléphone et synchronisation entre machines : [docs/passation-mobile-sync.md](docs/passation-mobile-sync.md).
-
-Pour faire tout ça par un Claude Code local : [docs/claude-local.md](docs/claude-local.md) (macOS) ou
-[docs/claude-local-wsl.md](docs/claude-local-wsl.md) (Windows + WSL2). Sous WSL2, si Ollama tourne côté
-Windows, `OLLAMA_HOST` indique à lem où le trouver.
+Sous Windows + WSL2, si Ollama tourne côté Windows, `OLLAMA_HOST` indique à lem où le trouver.
 
 Pour noter les définitions avec ton abonnement Claude, en fin de session : menu « Noter avec Claude »,
 ou `lem noter --modele sonnet` (ou `haiku` pour les grosses fournées). La commande `claude` (Claude

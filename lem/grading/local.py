@@ -6,7 +6,7 @@ avant l'auto-évaluation et le cosinus (`journal.PRIORITE_CORRECTEUR`). Ollama c
 JSON : la réponse est toujours lisible.
 
 Le modèle se règle par `/juge <modèle>` ou `/juge non` (réglage global « juge_local »). Sur un Mac de 16 Go,
-préférer un modèle de 4 à 8 milliards de paramètres ; le correcteur distillé (docs/passation-distillation.md)
+préférer un modèle de 4 à 8 milliards de paramètres ; un correcteur distillé
 le remplacera.
 """
 
