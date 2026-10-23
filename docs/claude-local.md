@@ -1,58 +1,84 @@
 # Prompt pour Claude Code en local (Mac)
 
-À coller tel quel dans Claude Code, lancé dans un dossier de travail sur ton Mac.
+À coller tel quel dans Claude Code, lancé dans un dossier de travail sur le Mac. Le Mac est désormais la
+machine cible : il faut un logiciel local impeccable, avant toute idée de téléphone ou de synchronisation.
 
 ---
 
 Tu travailles sur **lem** (https://github.com/AnnibalBarca/lem), un moteur d'apprentissage du lexique
-français en terminal (Python, Textual, SQLite, FSRS, bge-m3). Le code a été écrit dans un environnement
-cloud qui n'avait pas accès aux dictionnaires ni à Ollama. Ta mission : **brancher la vraie base sur
-ce Mac** et me rendre un rapport chiffré. Lis d'abord `README.md` et `DESIGN.md`.
+français en terminal (Python, Textual, SQLite, FSRS, bge-m3). Lis d'abord `README.md`, `DESIGN.md`,
+`docs/rapport-integration-wsl.md` (la vraie base, telle qu'ingérée sur le PC) et `docs/rapport-moteur.md`
+(le moteur des Cartes v2, réglé sur un élève simulé). Ta mission : **mettre lem en service sur ce Mac et
+vérifier qu'il y est impeccable**, puis me rendre un rapport chiffré.
 
-Machine : MacBook M4 15 pouces, 16 Go de RAM. Les données vont dans `~/.lem/` (jamais dans le dépôt).
+Machine : MacBook M4 15 pouces, 16 Go de RAM. En même temps tournent souvent bge-m3 (Ollama) et une dictée
+Whisper (touche Option droite) : **aucun autre modèle local**. Le juge des définitions est Claude Haiku en
+headless, sur l'abonnement. Les données vont dans `~/.lem/` (jamais dans le dépôt).
 
 ## Étapes
 
-1. **Prérequis.** Vérifie ou installe `uv`, `ollama` (Homebrew) et Claude Code (`claude`). Clone le
-   dépôt, puis `uv venv && uv pip install -e ".[dev]" && .venv/bin/pytest`. Tous les tests doivent passer
-   avant d'aller plus loin.
-2. **Sources.** `lem telecharger lexique wiktionnaire`. Si une URL a bougé, trouve la bonne (Lexique 3.83
-   sur lexique.org ; l'extraction wiktextract du Wiktionnaire **français** sur kaikki.org/frwiktionary —
-   PAS kaikki.org/dictionary/French, qui est le Wiktionnaire anglais), mets à jour
-   `lem/ingest/telecharger.py` et relance. JeuxDeMots est optionnel (`lem telecharger jeuxdemots`).
-3. **Vérifier les lecteurs sur les vrais fichiers avant d'ingérer.** Les lecteurs (`lem/ingest/__init__.py`)
-   ont été écrits d'après le format documenté, sans voir les fichiers réels. Inspecte une vingtaine de
-   lignes de chaque source : en-têtes du TSV de Lexique ; dans le JSONL wiktextract, les champs `word`,
-   `lang_code`, `pos`, `senses[].glosses`, `topics` / `raw_tags`, `etymology_texts`, `forms`, `synonyms`,
-   `sounds`. Corrige les lecteurs si besoin et ajoute un test avec un extrait réel (quelques lignes) dans
-   `tests/`.
-4. **Ingestion.** `lem ingest lexique …`, `lem ingest wiktionnaire …`, `lem ingest wordfreq`, puis
-   `lem prior --cible 45000`. Rapporte : nombre d'entrées, de sens, de formes, de domaines, de morphèmes,
-   de relations de synonymie, la répartition par origine (grec, latin…) et la durée de chaque étape.
-   Contrôle à la main une dizaine d'entrées (acronyme, thuriféraire, sigle, mitose, kjökkenmödding,
-   « les sages de la rue Montpensier » si elle existe) : définitions en français, domaines, origine,
-   morphèmes plausibles.
-5. **Vecteurs.** `ollama pull bge-m3`, puis `lem index`. Mesure le débit (textes par seconde). Si
-   l'estimation dépasse 2 h, propose-moi de restreindre l'indexation (lemmes avec Zipf > 0, sens de rang ≤ 3)
-   avant de lancer. Rapporte la taille de la base ensuite.
-6. **Calibrage.** `lem calibrer`. Rapporte les seuils obtenus et les mesures (synonymes vs hasard). Si
-   l'écart entre la médiane des synonymes et le 95e centile du hasard est trop faible (< 0,05), dis-le.
-7. **Performance.** Mesure, sur la base réelle : temps de démarrage de `lem` ; latence d'une notation
-   `noter_recep` (plongement, puis dictionnaire inversé sur tous les sens) ; construction d'une
-   `PartieBombe` (dictionnaire de ~1 M formes) ; `CarteConnaissance.recalculer_tout()`. Si les plus proches
-   voisins dépassent 150 ms et que la RAM le permet, garde la matrice en float32 dans `lem/vecteurs.py`.
-   Si `recalculer_tout` dépasse 10 s, vectorise-le (numpy) sans changer son résultat.
-8. **Essai réel.** Lance `lem` et joue 2 minutes à chaque jeu. Vérifie le rendu du logo et des couleurs
-   dans le Terminal macOS et dans iTerm2 si présent. Lance `lem noter --modele haiku` sur les quelques
-   définitions produites, pour vérifier la chaîne Claude headless de bout en bout.
+1. **Code.** Clone le dépôt, branche `local/moteur` (la plus avancée ; elle contient `local/integration`).
+   `uv venv && uv pip install -e ".[dev]" && .venv/bin/pytest` : tout doit passer. Puis
+   `uv tool install -e .` et vérifie que `lem` est dans le PATH.
+2. **La base.** Deux voies ; demande-moi laquelle si je ne l'ai pas dit :
+   - **A, copier la base du PC** (recommandée : elle garde mon journal, ma carte, mes vecteurs). Sur le PC,
+     lem fermé : `python3 -c "import sqlite3; sqlite3.connect('$HOME/.lem/lem.sqlite').execute('PRAGMA wal_checkpoint(TRUNCATE)')"`,
+     puis copier `~/.lem/lem.sqlite` (environ 2,7 Go) vers `~/.lem/lem.sqlite` sur le Mac (AirDrop, clé, scp).
+     Le dossier `~/.lem/cache/` se reconstruit seul : ne pas le copier.
+   - **B, reconstruire sur le Mac** : `lem telecharger lexique wiktionnaire --ingerer`, puis
+     `ollama pull bge-m3 && lem index --zipf-min 0 --rang-max 3`, puis `lem calibrer`. Mesure la durée de
+     l'indexation (sur le PC : 1 h 44 avec la carte graphique).
+3. **Première ouverture.** Lance `lem` une fois et ferme-le. Une base jouée avec l'ancien moteur est mise à
+   niveau seule (`lem/memory/migration.py` : observations reconstituées, FSRS rejoué, a priori recalibré).
+   Vérifie avant/après :
+   - P(connu) de *acronyme*, *pomme de terre*, *thuriféraire* et *isotope* ;
+   - la répartition des états dans l'Atlas ;
+   - le nombre de lignes de `observation` ;
+   - `SELECT statut, COUNT(*) FROM trace_etat GROUP BY statut`.
+4. **Mémoire et temps.** Avec Ollama (bge-m3 chargé) et, si possible, la dictée Whisper ouverte, mesure :
+   - la RAM de lem (`/usr/bin/time -l`, ou le Moniteur d'activité) à l'accueil, puis dans chaque jeu ;
+   - le temps d'ouverture de chaque jeu ;
+   - la latence d'une carte à la suivante ;
+   - `noter_recep`.
+
+   Cible : lem sous 3 à 4 Go. Si c'est trop, essaie `LEM_VECTEURS=float16` et dis ce que ça coûte.
+5. **Le juge Haiku.** Dans les Cartes : `/juge auto` doit choisir Haiku (pas de modèle Ollama de jugement
+   sur le Mac). Mesure le délai du verdict (`claude -p` par définition). Vérifie que l'écran reste libre
+   pendant ce temps et que le verdict remplace bien la note proposée. Si le délai dépasse 10 s, propose une
+   amélioration, par exemple regrouper deux ou trois définitions par appel, ou trouver des options de
+   `claude -p` qui allègent le démarrage (vérifie-les dans `claude --help`, n'invente rien).
+6. **Rendu.** Joue 3 à 5 minutes à chaque jeu dans le Terminal macOS, et dans iTerm2 ou Ghostty s'ils
+   sont là. Vérifie :
+   - le logo en cubes, les couleurs (qui ne servent qu'à signifier) ;
+   - les flèches, Tab, Échap ;
+   - les touches Option et accents (é, è, ç, œ) ;
+   - la dictée Whisper (Option droite) : elle doit être repérée comme dictée et jamais comptée comme
+     faute de graphie ;
+   - la taille de fenêtre minimale lisible.
+
+   Corrige ce qui accroche, dans le style existant.
+7. **Le moteur des Cartes.** Une session réelle de 10 minutes. Vérifie :
+   - la sonde (« le connais-tu ? », Entrée seule = je ne sais pas) ;
+   - qu'aucune carte d'un même mot ne suit sa sœur ;
+   - que « sens → mot » vient une dizaine de cartes après la découverte ;
+   - le bilan de fin de session ;
+   - `/intention`, `/minutes`, `lem interets science=2`.
+
+   Note tout ce qui te semble mal dosé ; ne change pas les réglages sans un passage au banc
+   (`lem simuler --graines 3`).
+8. **Optimiseur.** `lem optimiser --essai` : rapporte le nombre de révisions espacées par trace et, s'il y
+   en a assez, la perte récente avant/après.
 
 ## Règles
 
-- Ne change ni l'architecture (journal en ajout seul, état dérivé et rejouable), ni le design
-  (monochrome ; la couleur ne sert qu'à signifier).
+- Ne change ni l'architecture (journal en ajout seul, état dérivé et rejouable), ni le design (monochrome ;
+  la couleur ne sert qu'à signifier).
 - **Graphie** : aucune variante orthographique n'est acceptée ; seule exception, réglable et choisie par
   l'utilisateur : les accents manquants (`accents_tolerants`). N'ajoute aucune autre tolérance.
-- Aucune donnée dans le dépôt (`~/.lem/` uniquement). Pas de secrets dans les commits.
-- Travaille sur une branche `local/integration`, en commits petits et clairs, puis pousse-la. Ne pousse
-  pas sur `main`.
-- Termine par un rapport : ce qui marche, ce que tu as corrigé, les chiffres, et ce qui reste à faire.
+- Pas de modèle local de jugement sur le Mac (mémoire) ; Claude Haiku en headless.
+- Aucune donnée dans le dépôt (`~/.lem/` uniquement). Pas de secrets dans les commits. Pas de `sudo` sans
+  me demander.
+- Travaille sur une branche `local/mac` partie de `local/moteur`, en commits petits et clairs (français,
+  style du dépôt), tests verts, puis pousse-la. Ne pousse ni sur `main` ni sur les autres branches.
+- Termine par un rapport `docs/rapport-mac.md` : la machine, ce qui marche, ce que tu as corrigé, les
+  chiffres (RAM, temps, latences, juge), et ce qui reste à faire.
