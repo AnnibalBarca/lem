@@ -1,6 +1,8 @@
 """Atlas : ce que le journal dit de toi, calculé (pas de LLM).
 
   1. Carte      : combien de mots, dans quel état (estimé pour tout le lexique).
+  1bis. Mémoire : le moteur sur tes révisions — réussite réelle contre réussite prévue, mots connus à la
+                  sonde, vérifiés, en apprentissage, charge à venir, paramètres FSRS.
   2. Profil     : tes θ — où tu t'écartes de « l'adulte cultivé moyen » (origines, domaines, morphèmes).
   3. Signature  : la répartition de tes types d'erreur de définition (trop générale, connotation seule…).
   4. Confusions : tes paires confondues, avec la nature de la proximité.
@@ -28,6 +30,37 @@ def _titre(t: Text, s: str) -> None:
     t.append(f"\n{s}\n", style=f"bold {BLANC}")
 
 
+def _memoire(con: sqlite3.Connection, t: Text) -> None:
+    from lem.db import get_reglage
+    from lem.memory import scheduler
+    from lem.memory.optimiseur import bilan
+
+    _titre(t, "MÉMOIRE — le moteur sur tes révisions (30 jours)")
+    noms = {"recep": "sens", "prod": "mot", "ortho": "graphie"}
+    cfg = get_reglage(con, "fsrs", {}) or {}
+    par_trace = cfg.get("par_trace") or {}
+    for trace, nom in noms.items():
+        b = bilan(con, trace)
+        t.append(f"  {nom:<10}", style=BLANC)
+        if not b.n:
+            t.append("pas encore de révision espacée", style=SOMBRE)
+        else:
+            ecart = b.reussite - b.prevue
+            coul = ETATS["acquis"][0] if abs(ecart) < 0.05 else ETATS["flou"][0]
+            t += barre(b.reussite, 20, coul)
+            t.append(f" {b.reussite:.0%} réussies", style=BLANC)
+            t.append(f" (FSRS prévoyait {b.prevue:.0%}, {b.n} révisions)", style=GRIS)
+        t.append("   " + ("paramètres ajustés" if trace in par_trace else "paramètres par défaut") + "\n", style=SOMBRE)
+    statuts = dict(con.execute(
+        "SELECT COALESCE(statut, 'apprentissage'), COUNT(DISTINCT entree_id) FROM trace_etat GROUP BY 1").fetchall())
+    t.append(f"  {statuts.get('apprentissage', 0)} mots en apprentissage · {statuts.get('connu_sonde', 0)} connus à la "
+             f"sonde (vérification à venir) · {statuts.get('verifie', 0)} vérifiés\n", style=GRIS)
+    t.append(f"  charge : {scheduler.charge(con, 7):.0f} révisions par jour sur la semaine", style=GRIS)
+    if cfg.get("optimise_le"):
+        t.append(f" · paramètres revus le {cfg['optimise_le'][:10]}", style=SOMBRE)
+    t.append("\n")
+
+
 def rapport(con: sqlite3.Connection) -> Text:
     t = Text()
 
@@ -47,6 +80,9 @@ def rapport(con: sqlite3.Connection) -> Text:
         t.append(f"  {lib:<16}", style=coul)
         t += barre(n / total, 30, coul)
         t.append(f" {n}\n", style=GRIS)
+
+    # 1bis. Mémoire
+    _memoire(con, t)
 
     # 2. Profil
     _titre(t, "PROFIL — écarts à l'adulte cultivé moyen")

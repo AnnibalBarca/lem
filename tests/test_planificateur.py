@@ -1,5 +1,7 @@
 """Planificateur de session, sonde des mots nouveaux, vérification unique, optimiseur, banc d'essai."""
 
+import os
+import tempfile
 from datetime import timedelta
 
 import pytest
@@ -144,3 +146,20 @@ def test_banc_d_essai_v2_mieux_que_rien():
 
     r = simuler({}, jours=6, n_mots=800, graine=1)
     assert r.mots_vus > 20 and r.retenus_sens > 0 and 0 <= r.brier_carte < 0.3 and r.auc_carte > 0.8
+
+
+def test_atlas_memoire_et_bilan():
+    """L'Atlas montre la réussite réelle des révisions contre celle prévue par FSRS."""
+    from lem.atlas import rapport
+    from lem.db import connect
+    from lem.memory.optimiseur import bilan
+    from lem.simulation import simuler
+
+    with tempfile.TemporaryDirectory() as d:
+        chemin = os.path.join(d, "b.sqlite")
+        simuler({}, jours=8, n_mots=600, chemin=chemin, graine=2)
+        con = connect(chemin)
+        texte = rapport(con).plain
+        assert "MÉMOIRE" in texte and "mots en apprentissage" in texte
+        b = bilan(con, "recep", jours=3650)
+        assert b.n == 0 or 0 <= b.reussite <= 1

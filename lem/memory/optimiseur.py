@@ -173,3 +173,35 @@ def a_optimiser(con: sqlite3.Connection, jours: int = 7, nouvelles: int = 100) -
         return n >= MIN_REVISIONS
     ecart = (now() - parse_iso(cfg["optimise_le"])).total_seconds() / 86400
     return ecart >= jours and n - cfg.get("n_revisions_brutes", 0) >= nouvelles
+
+
+@dataclass
+class Bilan:
+    n: int
+    reussite: float | None          # part des révisions espacées réussies
+    prevue: float | None            # rétention moyenne que FSRS prévoyait pour ces révisions
+
+
+def bilan(con: sqlite3.Connection, trace: str, jours: int = 30) -> Bilan:
+    """Révisions espacées (≥ 1 jour) des `jours` derniers jours pour une trace : réussite réelle et prévue.
+    Un écart durable dit que les paramètres ne collent pas à ta mémoire (l'optimiseur le corrige)."""
+    from datetime import datetime, timezone
+
+    from lem.memory.scheduler import ordonnanceur
+
+    sched = ordonnanceur(con, trace)
+    depuis = now().timestamp() - jours * 86400
+    ok, n, somme_r = 0, 0, 0.0
+    for seq in sequences(con, trace):
+        card = Card(card_id=1, due=datetime.fromtimestamp(seq[0][0], timezone.utc))
+        precedent = None
+        for t, note in seq:
+            quand = datetime.fromtimestamp(t, timezone.utc)
+            if precedent is not None and t - precedent >= 86400 and t >= depuis and card.stability:
+                somme_r += sched.get_card_retrievability(card, quand)
+                ok += note > 1
+                n += 1
+            card, _ = sched.review_card(card, Rating(note), quand)
+            precedent = t
+    return Bilan(n, ok / n if n else None, somme_r / n if n else None)
+
