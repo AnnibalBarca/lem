@@ -44,6 +44,7 @@ MEMOIRE = enregistrer(Jeu(
     params=[
         Param("mode", "Mode", str, "entrainement", "entrainement = comme le test · elucubrations = mots étranges",
               choix=("entrainement", "elucubrations")),
+        Param("locutions", "Locutions", bool, False, "élucubrations : aussi les entrées de plusieurs mots"),
         Param("vies", "Vies", int, 3, "", 1, 10),
         Param("encodage", "Invite « image ? »", str, "estompe",
               "entraînement : libre = jamais · guide = toujours · estompe = s'efface quand ton record monte",
@@ -156,7 +157,8 @@ class PartieMemoire:
         else:
             rows = self.con.execute(
                 """SELECT id, forme, zipf, type, origine FROM entree
-                   WHERE COALESCE(zipf, 0) < 2.5 OR type IN ('nom_propre', 'etranger', 'compose')"""
+                   WHERE (COALESCE(zipf, 0) < 2.5 OR type IN ('nom_propre', 'etranger', 'compose'))"""
+                + ("" if self.params.get("locutions") else " AND type != 'expression' AND instr(forme, ' ') = 0")
             ).fetchall()
             notes = sorted(((etrangete(r["forme"], r["zipf"], r["type"], r["origine"]), r) for r in rows),
                            key=lambda x: -x[0])

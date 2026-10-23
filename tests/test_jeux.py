@@ -350,3 +350,13 @@ def test_cartes_sans_locutions_meme_en_revision(con, carte, rng):
     scheduler.reconstruire(con)
     partie = PartieCartes(con, params("cartes", nouveaux=200), carte, rng=rng)
     assert loc in partie._hors_jeu
+
+
+def test_memoire_elucubrations_sans_locutions(con, rng):
+    from lem.games import REGISTRE
+
+    p = PartieMemoire(con, {**REGISTRE["memoire"].defauts(), "mode": "elucubrations", "etrangete": 0.0}, rng=rng)
+    assert all(" " not in r["forme"] for r in p.etranges)
+    p2 = PartieMemoire(con, {**REGISTRE["memoire"].defauts(), "mode": "elucubrations", "etrangete": 0.0,
+                             "locutions": True}, rng=rng)
+    assert any(" " in r["forme"] for r in p2.etranges)
