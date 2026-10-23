@@ -10,3 +10,4 @@ dist/
 *.sqlite-wal
 *.sqlite-shm
 *.npy
+.venv-ml/

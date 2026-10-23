@@ -154,7 +154,7 @@ def ajouter_mnemo(
 # Priorité des correcteurs : la note la plus fiable l'emporte pour FSRS.
 # « soi » = ton auto-évaluation après révélation (façon Anki) ; elle passe après les
 # correcteurs externes, et l'écart soi ↔ correcteur est lui-même une mesure (métacognition).
-PRIORITE_CORRECTEUR = ("humain", "jev", "claude", "local", "soi", "embedding")
+PRIORITE_CORRECTEUR = ("humain", "jev", "claude", "distille", "local", "soi", "embedding")
 
 
 def rang_correcteur(nom: str) -> int:
