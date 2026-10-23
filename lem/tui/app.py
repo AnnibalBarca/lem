@@ -95,7 +95,7 @@ MENU = [
     ("cartes", "Cartes", "définir · retrouver · distinguer"),
     ("bombe", "Bombe", "des lettres, un mot, avant l'explosion"),
     ("syllabaire", "Syllabaire", "les suites rares de la Bombe, par cœur"),
-    ("memoire", "Mémoire verbale", "vu ou nouveau ? les mots les plus étranges"),
+    ("memoire", "Mémoire verbale", "vu ou nouveau ? entraînement au test, ou mots étranges"),
     ("mot_ou_pas", "Mot ou pas mot", "décision lexicale chronométrée"),
     ("etalonnage", "Étalonnage", "placer ta carte de connaissance"),
     ("atlas", "Atlas", "ta carte, tes confusions, ta signature"),
@@ -1032,7 +1032,8 @@ class EcranSyllabaire(EcranPartie):
 # ── Mémoire verbale ─────────────────────────────────────────────────────────────────────────────
 
 class EcranMemoire(EcranPartie):
-    BINDINGS = [Binding("escape", "quitter", "Menu"), Binding("v", "vu", "Vu"), Binding("n", "nouveau", "Nouveau")]
+    BINDINGS = [Binding("escape", "quitter", "Menu"), Binding("v", "vu", "Vu"), Binding("n", "nouveau", "Nouveau"),
+                Binding("space", "image", "Image prête", show=False)]
 
     def construire(self):
         from lem.games.memoire_verbale import PartieMemoire
@@ -1040,30 +1041,51 @@ class EcranMemoire(EcranPartie):
         return PartieMemoire(self.ctx.con, self.params, self.session_id)
 
     def demarrer(self) -> None:
-        self.attente_image = None
+        self.attente_image = None        # élucubrations : champ d'image mentale écrite
+        self.attente_encodage = None     # entraînement : « image ? », Espace quand elle est là
         self.query_one("#saisie").display = False
         self.maj("detail", Text("V = déjà vu · N = nouveau", style=GRIS))
+        self.maj("retour", Text(""))
         self._suivant()
+
+    def _entete(self) -> None:
+        p = self.partie
+        t = Text("♥ " * p.vies, style=f"bold {BLANC}") + Text(f"  {p.score}", style=BLANC)
+        if p.mode == "entrainement":
+            t += Text(f"   entraînement · record {p.record}", style=GRIS)
+        else:
+            t += Text("   élucubrations", style=GRIS)
+        self.maj("entete", t)
 
     def _suivant(self) -> None:
         tour = self.partie.suivant()
         style = f"bold {BLANC}"
         mot = logo.rangee(tour.forme) if len(tour.forme) <= 18 and " " not in tour.forme else Text(tour.forme, style=style)
         self.maj("stimulus", mot)
-        self.maj("entete", Text("♥ " * self.partie.vies, style=f"bold {BLANC}") + Text(f"  {self.partie.score}", style=BLANC)
-                 + Text("   mémoire verbale", style=GRIS))
+        self._entete()
         self.chrono.reset()
 
     def _repondre(self, vu: bool) -> None:
-        if not self.pret or self.attente_image is not None or self.partie.finie:
+        if not self.pret or self.attente_image is not None or self.attente_encodage is not None or self.partie.finie:
             return
         lat, _ = self.chrono.mesures()
         tour = self.partie.tour
         ok = self.partie.repondre(vu, lat)
-        self.maj("retour", Text("✓" if ok else "✗", style=f"bold {BLANC if ok else '#ff5f5f'}"))
+        r = Text("✓" if ok else "✗", style=f"bold {BLANC if ok else '#ff5f5f'}")
+        if not ok:
+            r.append("   vu tout à l'heure" if tour.deja_vu else "   jamais vu dans cette partie", style=GRIS)
+        if tour.deja_vu and (img := self.partie.image(tour.entree_id)):
+            r.append(f"   ton image : {img}", style=GRIS)
+        self.maj("retour", r)
         if self.partie.finie:
-            self.maj("stimulus", logo.rangee("fin"))
-            self.maj("entete", Text(f"score {self.partie.score}", style=f"bold {BLANC}"))
+            self._fin()
+            return
+        if self.partie.mode == "elucubrations" and tour.premiere_fois and self.params.get("definitions"):
+            d = self.partie.definition(tour.entree_id)
+            self.maj("detail", Text(f"{tour.forme} — {d}" if d else "V = déjà vu · N = nouveau", style=GRIS))
+        if tour.premiere_fois and tour.guider:
+            self.attente_encodage = (tour.entree_id, time.monotonic())
+            self.maj("detail", Text("image ?   une image vive, avec ce mot — Espace quand elle est là", style=BLANC))
             return
         if tour.premiere_fois and tour.imager:
             self.attente_image = tour.entree_id
@@ -1073,6 +1095,38 @@ class EcranMemoire(EcranPartie):
             champ.focus()
             return
         self._suivant()
+
+    def action_image(self) -> None:
+        if self.attente_encodage is None:
+            return
+        eid, t0 = self.attente_encodage
+        self.attente_encodage = None
+        self.partie.encoder(eid, int((time.monotonic() - t0) * 1000))
+        self.maj("detail", Text("V = déjà vu · N = nouveau", style=GRIS))
+        self._suivant()
+
+    def _fin(self) -> None:
+        b = self.partie.bilan()
+        self.maj("stimulus", logo.rangee("fin"))
+        t = Text(f"score {b['score']}", style=f"bold {BLANC}")
+        if self.partie.mode == "entrainement":
+            t.append("   nouveau record !" if b["nouveau_record"] else f"   record {b['record']}", style=BLANC)
+            if b["mediane_precedente"] is not None:
+                t.append(f"   médiane des 10 dernières {b['mediane_precedente']:.0f}", style=GRIS)
+        self.maj("entete", t)
+        d = Text()
+        d.append(f"{b['fausses_alertes']} fausse{'s' * (b['fausses_alertes'] > 1)} alerte"
+                 f"{'s' * (b['fausses_alertes'] > 1)}", style=BLANC)
+        d.append(" (« vu » pour un mot nouveau : la familiarité t'a trompé)\n", style=GRIS)
+        d.append(f"{b['oublis']} oubli{'s' * (b['oublis'] > 1)}", style=BLANC)
+        d.append(" (« nouveau » pour un mot vu : l'encodage a manqué)\n", style=GRIS)
+        if b["latence_ms"]:
+            d.append(f"réponse en {b['latence_ms'] / 1000:.1f} s".replace(".", ","), style=GRIS)
+        if b["encodage_ms"]:
+            d.append(f" · image en {b['encodage_ms'] / 1000:.1f} s ({b['guides']} invites)".replace(".", ","),
+                     style=GRIS)
+        d.append("\nÉchap : menu", style=SOMBRE)
+        self.maj("detail", d)
 
     def on_input_submitted(self, ev: Input.Submitted) -> None:
         if self.attente_image is not None:

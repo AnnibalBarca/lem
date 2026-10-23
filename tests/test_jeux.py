@@ -140,7 +140,7 @@ def test_cartes_indice_plafonne_la_note(con, carte, rng):
 
 
 def test_memoire_verbale(con, rng):
-    m = PartieMemoire(con, params("memoire", imagerie="experience"), rng=rng)
+    m = PartieMemoire(con, params("memoire", mode="elucubrations", imagerie="experience"), rng=rng)
     n = 0
     while not m.finie and n < 200:
         t = m.suivant()
@@ -149,6 +149,29 @@ def test_memoire_verbale(con, rng):
     assert m.score == n and not m.finie
     m.enregistrer_image(m.tour.entree_id, "un amas de coquilles sous la pluie")
     assert con.execute("SELECT COUNT(*) FROM mnemo").fetchone()[0] == 1
+
+
+def test_memoire_entrainement_encodage_qui_s_efface(con, rng):
+    from lem.games.memoire_verbale import guides_par_partie, scores
+
+    assert guides_par_partie(0, "estompe") > 1000 and guides_par_partie(120, "estompe") == 10
+    assert guides_par_partie(250, "estompe") == 0 and guides_par_partie(250, "guide") > 1000
+    assert guides_par_partie(0, "libre") == 0
+    sid = con.execute("INSERT INTO session(jeu, debut) VALUES('memoire', '2026-01-01')").lastrowid
+    m = PartieMemoire(con, params("memoire"), session_id=sid, rng=rng)
+    assert m.mode == "entrainement" and m.record == 0
+    assert all(" " not in r["forme"] for r in m.etranges)
+    t = m.suivant()
+    assert t.guider and not t.imager
+    m.repondre(True, 600)                    # « vu » pour un mot nouveau : fausse alerte
+    m.encoder(t.entree_id, 1400)
+    while not m.finie:
+        t = m.suivant()
+        m.repondre(not t.deja_vu, 600)       # toujours faux
+    b = m.bilan()
+    assert b["fausses_alertes"] >= 1 and b["fausses_alertes"] + b["oublis"] == params("memoire")["vies"]
+    assert b["encodage_ms"] == 1400 and b["score"] == 0
+    assert scores(con, "entrainement") == [0] and scores(con, "elucubrations") == []
 
 
 def test_etrangete_ordre():

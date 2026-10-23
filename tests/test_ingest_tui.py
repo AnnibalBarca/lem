@@ -213,3 +213,28 @@ async def test_cartes_session_complete_sonde_et_bilan(tmp_path):
     con = ctx.con
     roles = {r[0] for r in con.execute("SELECT json_extract(data, '$.role') FROM evenement WHERE type = 'reponse'")}
     assert "sonde" in roles
+
+
+async def test_memoire_entrainement_invite_image(tmp_path):
+    from lem.cli import main
+    from lem.contexte import Contexte
+    from lem.tui.app import EcranMemoire, LemApp
+
+    chemin = tmp_path / "t.sqlite"
+    main(["--db", str(chemin), "demo", "--sans-jeu"])
+    app = LemApp(Contexte(chemin))
+    async with app.run_test(size=(110, 50)) as pilot:
+        await pilot.pause(1.6)
+        await pilot.press("down", "down", "down", "enter", "j")
+        e = app.screen
+        assert isinstance(e, EcranMemoire)
+        while not e.pret:
+            await pilot.pause(0.05)
+        premier = e.partie.tour.forme
+        await pilot.press("n")                                     # nouveau : l'invite « image ? » attend
+        assert e.attente_encodage is not None and "image ?" in str(e.query_one("#detail").render())
+        await pilot.press("v")                                     # ignoré tant que l'image n'est pas là
+        assert e.partie.score == 1
+        await pilot.press("space")
+        assert e.attente_encodage is None and e.partie.encodages
+        assert e.partie.tour.forme != premier or e.partie.tour.deja_vu
