@@ -6,6 +6,10 @@ On ne peut pas juger un ordonnanceur à l'œil. On fabrique donc :
     origine et morphème, comme un vrai lecteur), et pour chaque mot appris deux mémoires
     (sens, forme) qui oublient selon une courbe de puissance et se renforcent à la récupération,
     d'autant plus que le souvenir était fragile (effet d'espacement) ;
+  * des PARONYMES (15 % des mots ne diffèrent d'un autre que d'une lettre) et une INTERFÉRENCE : en
+    cherchant un mot, l'élève peut sortir son voisin, d'autant plus que le voisin est bien appris et
+    que la paire n'a pas été distinguée ; les duels (et, un peu, la liste « à ne pas confondre ») la
+    réduisent ;
   * des sessions quotidiennes de durée fixe, jouées par le vrai moteur (PartieCartes), avec une
     horloge simulée.
 
@@ -53,8 +57,21 @@ def _mot(rng: random.Random, pris: set[str]) -> str:
             return m
 
 
-def lexique_synthetique(con: sqlite3.Connection, n: int = 3000, graine: int = 0) -> list[int]:
-    """Remplit `con` d'un lexique de `n` entrées. Renvoie leurs ids."""
+def _variante(rng: random.Random, base: str, pris: set[str]) -> str | None:
+    """Un paronyme : une voyelle ou une consonne change (« bacitone » → « bacetone »)."""
+    for _ in range(20):
+        i = rng.randrange(len(base))
+        c = base[i]
+        jeu = "aeiou" if c in "aeiou" else "bcdfgjlmnprstvz"
+        m = base[:i] + rng.choice([x for x in jeu if x != c]) + base[i + 1:]
+        if m not in pris:
+            pris.add(m)
+            return m
+    return None
+
+
+def lexique_synthetique(con: sqlite3.Connection, n: int = 3000, graine: int = 0, paronymes: float = 0.15) -> list[int]:
+    """Remplit `con` d'un lexique de `n` entrées (dont une part de paronymes). Renvoie leurs ids."""
     rng = random.Random(graine)
     for macro, enfants in DOMAINES.items():
         domaine_id(con, macro)
@@ -65,8 +82,11 @@ def lexique_synthetique(con: sqlite3.Connection, n: int = 3000, graine: int = 0)
              [(f"-{rng.choice(SYLLABES)}{rng.choice('mnrl')}e", f"suffixe{i}") for i in range(20)]
     pris: set[str] = set()
     ids = []
+    formes: list[str] = []
     for i in range(n):
-        forme = _mot(rng, pris)
+        forme = (_variante(rng, rng.choice(formes), pris) if formes and rng.random() < paronymes else None) \
+            or _mot(rng, pris)
+        formes.append(forme)
         z = float(np.clip(rng.gauss(2.6, 1.3), 0.0, 6.5))
         origine = rng.choices([o for o, _ in ORIGINES], [w for _, w in ORIGINES])[0]
         eid = upsert_entree(con, forme, "nom", zipf=z, origine=origine)
@@ -103,6 +123,9 @@ class ParamsEleve:
     expo_sens: float = 0.25          # S (jours) d'un sens découvert à la révélation (~6 h)
     expo_forme: float = 0.10         # S d'une forme découverte (~2 h) : savoir le sens ≠ retrouver le mot
     transfert: float = 0.10          # une récupération d'un côté renforce un peu l'autre
+    interference: float = 0.6        # 0 : pas de confusion entre paronymes
+    gain_duel: float = 0.35          # distinction d'une paire gagnée par un duel réussi
+    gain_liste: float = 0.05         # … par la liste « à ne pas confondre » de la révélation
 
 
 PROFILS = {
@@ -159,6 +182,52 @@ class Eleve:
                 self.mem[(e, "forme")] = Trace(self.rng.uniform(0.5, 3), t0 - self.rng.uniform(20, 60) * JOUR)
             else:
                 self.etat0[e] = "inconnu"
+        self._voisins(con, ids)
+
+    def _voisins(self, con: sqlite3.Connection, ids: list[int]) -> None:
+        """Paronymes de chaque mot (similarité orthographique ≥ 0,7) : les candidats à l'intrusion."""
+        from lem.confusables import IndexFormel
+
+        index = IndexFormel(con)
+        formes = dict(con.execute("SELECT id, forme FROM entree").fetchall())
+        self.par_forme = {f: e for e, f in formes.items()}
+        self.voisins: dict[int, list[tuple[int, float]]] = {}
+        if self.p.interference <= 0:
+            return
+        for e in ids:
+            self.voisins[e] = [(n, s) for n, s in index.proches(formes[e], k=4, seuil=0.7) if n != e]
+        self.distinction: dict[frozenset, float] = {}
+
+    def confusion(self, e: int, cote: str, t: float, parmi: set[int] | None = None) -> float:
+        """Probabilité qu'en cherchant e, un voisin bien appris s'impose à sa place."""
+        if self.p.interference <= 0:
+            return 0.0
+        p_ok = 1.0
+        for n, s in self.voisins.get(e, ()):
+            if parmi is not None and n not in parmi:
+                continue
+            d = self.distinction.get(frozenset((e, n)), 0.0)
+            p_ok *= 1 - self.p.interference * s * (1 - d) * self.R(n, cote, t)
+        return 1 - p_ok
+
+    def distinguer(self, e: int, autres, gain: float) -> None:
+        if self.p.interference <= 0:
+            return
+        for n in autres:
+            if n is not None and n != e:
+                k = frozenset((e, n))
+                self.distinction[k] = min(1.0, self.distinction.get(k, 0.0) + gain)
+
+    def duel(self, e: int, options: list[int], t: float) -> tuple[bool, float]:
+        """Un duel : reconnaître le bon mot parmi des voisins. Réussi, il distingue les paires."""
+        R = self.R(e, "sens", t)
+        conf = self.confusion(e, "sens", t, set(options))
+        ok = self.rng.random() < R * (1 - conf)
+        if not ok and self.rng.random() < 1 / max(1, len(options)):
+            ok = True                                     # au hasard, ça tombe juste
+        self._renforcer(e, "sens", t, ok, facteur=0.5)
+        self.distinguer(e, options, self.p.gain_duel if ok else self.p.gain_duel / 2)
+        return ok, R
 
     def R(self, e: int, cote: str, t: float) -> float:
         tr = self.mem.get((e, cote))
@@ -177,9 +246,13 @@ class Eleve:
         tr.t = t
 
     def tenter(self, e: int, cote: str, t: float) -> tuple[bool, float]:
-        """Une tentative de récupération. Renvoie (succès, R au moment de la tentative)."""
+        """Une tentative de récupération. Renvoie (succès, R au moment de la tentative).
+        Une intrusion (le voisin s'impose) est une erreur, sans affaiblir la trace du mot lui-même."""
         R = self.R(e, cote, t)
         ok = self.rng.random() < R
+        if ok and self.rng.random() < self.confusion(e, cote, t):
+            self.distinguer(e, [n for n, _ in self.voisins.get(e, ())], self.p.gain_liste)
+            return False, R
         self._renforcer(e, cote, t, ok)
         if ok:
             autre = "forme" if cote == "sens" else "sens"
@@ -264,8 +337,8 @@ def simuler(moteur_params: dict | None = None, *, jours: int = 30, minutes: floa
     try:
         eleve = Eleve(con, ids, params_eleve, graine)
         t_eval0 = (jours - 1) * JOUR + delai_eval * JOUR
-        avant_s = {e: eleve.R(e, "sens", t_eval0) for e in ids}
-        avant_f = {e: eleve.R(e, "forme", t_eval0) for e in ids}
+        avant_s = {e: eleve.R(e, "sens", t_eval0) * (1 - eleve.confusion(e, "sens", t_eval0)) for e in ids}
+        avant_f = {e: eleve.R(e, "forme", t_eval0) * (1 - eleve.confusion(e, "forme", t_eval0)) for e in ids}
         params = {**REGISTRE["cartes"].defauts(), **(moteur_params or {})}
         rng = random.Random(graine + 7)
         cartes = 0
@@ -285,9 +358,7 @@ def simuler(moteur_params: dict | None = None, *, jours: int = 30, minutes: floa
                 e = it.entree_id
                 cote = "sens" if it.exercice in ("recep", "discrimination") else "forme"
                 if it.exercice == "discrimination":
-                    ok, R = eleve.tenter(e, "sens", horloge["t"])
-                    if not ok and rng.random() < 1 / max(1, len(it.options)):
-                        ok = True                                  # au hasard, ça tombe juste
+                    ok, R = eleve.duel(e, [x for x, _ in it.options], horloge["t"])
                     k = next(i for i, (x, _) in enumerate(it.options) if x == e) if ok else \
                         next((i for i, (x, _) in enumerate(it.options) if x != e), 0)
                     texte = str(k + 1)
@@ -303,6 +374,7 @@ def simuler(moteur_params: dict | None = None, *, jours: int = 30, minutes: floa
                 res = partie.repondre(it, texte, int(duree * 1000))
                 partie.valider(res, None if it.exercice in ("graphie", "discrimination") else eleve.note(ok, R))
                 eleve.exposer(e, horloge["t"])
+                eleve.distinguer(e, [eleve.par_forme.get(v["mot"]) for v in it.voisins[:5]], eleve.p.gain_liste)
                 cartes += 1
                 vus.add(e)
                 jeu_total += duree
@@ -325,8 +397,11 @@ def simuler(moteur_params: dict | None = None, *, jours: int = 30, minutes: floa
         acq_f = sum(eleve.R(e, "forme", t_eval) >= 0.8 for e in non_connus)
         # Ce que l'élève aurait retenu sans jouer : les mots flous oublient aussi ; on soustrait leur R initial
         # projeté à t_eval pour ne compter que l'apport du jeu.
-        ret_s = sum(eleve.R(e, "sens", t_eval) - avant_s.get(e, 0.0) for e in non_connus)
-        ret_f = sum(eleve.R(e, "forme", t_eval) - avant_f.get(e, 0.0) for e in non_connus)
+        # Retrouver le bon mot, pas son paronyme : R × (1 − probabilité d'intrusion).
+        ret_s = sum(eleve.R(e, "sens", t_eval) * (1 - eleve.confusion(e, "sens", t_eval)) - avant_s.get(e, 0.0)
+                    for e in non_connus)
+        ret_f = sum(eleve.R(e, "forme", t_eval) * (1 - eleve.confusion(e, "forme", t_eval)) - avant_f.get(e, 0.0)
+                    for e in non_connus)
         # Base de comparaison : ce que l'élève aurait su de toute façon (mots flous qui tiennent encore).
         base_s = sum(eleve.R(e, "sens", t_eval) >= 0.9 for e in non_connus if (e, "sens") in eleve.mem and e not in vus)
         t_fin = jours * JOUR

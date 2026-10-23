@@ -54,8 +54,8 @@ n'est jamais comptée comme la tienne, et les temps de réponse sont séparés (
 * les paramètres FSRS s'ajustent à ta mémoire chaque semaine, en fond (`lem optimiser` pour le faire
   à la main), un jeu par type de carte.
 
-Sur un élève simulé (`lem simuler`), ce moteur retient 16 à 90 % de mots de plus par heure que le
-précédent, et sa carte de ce que tu sais devient juste (score de Brier 0,4–0,7 → 0,08).
+Sur un élève simulé (`lem simuler`, avec paronymes et confusions), ce moteur retient 14 à 107 % de mots
+de plus par heure que le précédent, et sa carte de ce que tu sais devient juste (Brier 0,4–0,6 → 0,08).
 
 **Juge des définitions en direct** : `/juge auto` (défaut) prend un modèle Ollama s'il est installé (PC
 avec GPU), sinon **Claude Haiku** en headless sur ton abonnement (Mac : rien de plus en mémoire à côté

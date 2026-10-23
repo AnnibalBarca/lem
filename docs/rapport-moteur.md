@@ -24,7 +24,7 @@ Branche `local/moteur`, partie de `local/integration`, 23 octobre 2026.
 On ne juge pas un ordonnanceur à l'œil. `lem/simulation.py` (`lem simuler`) :
 
 * **Lexique synthétique** de 3 000 entrées : fréquences, domaines hiérarchisés, origines, morphèmes,
-  quelques synonymes.
+  quelques synonymes, et 15 % de **paronymes** (une lettre de différence avec un autre mot).
 * **Élève simulé dont on connaît la vérité** :
   * ce qu'il sait au départ, structuré comme un vrai lecteur (fréquence, affinités par domaine,
     origine, morphème, bruit) : environ 19 % de mots connus, 24 % flous, 57 % inconnus ;
@@ -32,7 +32,10 @@ On ne juge pas un ordonnanceur à l'œil. `lem/simulation.py` (`lem simuler`) :
     R = (1 + t/9S)⁻¹ ;
   * ces mémoires se renforcent à chaque récupération réussie, d'autant plus que le souvenir était
     fragile (SInc ∝ e^{0,8(1−R)} − 1, comme FSRS) ;
-  * savoir le sens ne donne pas la forme.
+  * savoir le sens ne donne pas la forme ;
+  * **interférence** : en cherchant un mot, l'élève peut sortir son paronyme, d'autant plus que le
+    paronyme est bien appris et que la paire n'a pas encore été distinguée. Un duel réussi distingue
+    la paire, la liste « à ne pas confondre » un peu.
 * **Trois profils** : faible, moyen (ordre de grandeur de la population de FSRS), fort. Les
   paramètres de l'élève ne sont pas ceux de FSRS : le moteur doit s'adapter à un élève qu'il ne
   connaît pas.
@@ -53,6 +56,20 @@ Chaque configuration est jouée avec 3 à 5 graines par profil ; ± indique l'é
 
 v1 = moteur de `local/integration` ; v2 = réglages par défaut de cette branche (optimiseur hebdomadaire
 compris). 5 graines par cellule.
+
+**Avec paronymes et interférence** (modèle par défaut du banc ; un mot « retenu » est retrouvé, et non
+remplacé par son paronyme) :
+
+| Élève | Sens par heure | Mot par heure | Total | Carte (Brier) |
+|---|---|---|---|---|
+| moyen | 17,9 ± 0,3 → 18,0 ± 0,9 | 7,4 ± 0,2 → **16,0 ± 1,7** | **+35 %** | 0,56 → **0,08** |
+| faible | 9,1 ± 0,7 → **13,1 ± 0,5** | 2,3 ± 0,3 → **10,7 ± 0,9** | **+107 %** | 0,38 → **0,08** |
+| fort | 22,9 ± 0,2 → 21,7 ± 0,9 | 14,0 ± 0,4 → **20,3 ± 0,8** | **+14 %** | 0,64 → **0,08** |
+
+Les duels (v2 sans duels → v2) : sens +2 % (moyen), +2 % (faible), +7 % (fort) ; mot +5 %, +6 %, +5 %.
+L'effet est petit mais va dans le même sens sur les trois profils : ils restent, activés par défaut.
+
+**Sans interférence** (première version du banc) :
 
 | Élève | Sens retenus par heure | Mots retenus par heure | Total | Carte (Brier) | Mots acquis par heure (sens / mot) |
 |---|---|---|---|---|---|
@@ -98,9 +115,10 @@ après un vrai délai, puis l'espacement d'une session à l'autre.
   moteurs, à graine égale et sur trois profils, sont plus solides que les niveaux.
 * **Le juge est parfait dans le banc** : l'élève s'auto-évalue honnêtement. En vrai, une définition
   est notée par bge-m3, puis Haiku, puis Claude. Les erreurs de notation ne sont pas simulées.
-* **Pas d'interférence entre mots proches** (*acronyme / sigle*) dans le modèle : l'effet des duels
-  n'est pas mesuré, ils coûtent du temps sans rien rapporter au banc. Ils restent, parce que c'est
-  ce que tu as demandé et que la discrimination est un effet bien documenté.
+* **L'interférence est modélisée simplement.** Elle ne joue qu'entre paronymes orthographiques
+  (similarité ≥ 0,7), pas entre voisins de sens (*acronyme / sigle*), que le lexique synthétique n'a
+  pas. Avec ce modèle, les duels rapportent un peu (§ 3) ; l'effet réel sur des confusions de sens
+  reste à mesurer sur ton journal (l'Atlas montre tes confusions).
 * **Le lexique synthétique est petit** (3 000 entrées). Le temps de démarrage a été mesuré à part sur
   200 000 entrées : 3,2 s sans l'index compact du lexique, environ 1,5 s avec (le cas de lem).
 * **Rien n'a été mesuré sur ta vraie base ni sur le Mac.** Une base jouée avec v1 est mise à niveau
@@ -120,7 +138,8 @@ après un vrai délai, puis l'espacement d'une session à l'autre.
   * le coût d'un mot.
 
   `lem simuler --params '{"…"}'` permet de tester une idée avant de la jouer.
-* **Mesurer l'effet des duels** : ajouter au modèle d'élève une interférence entre confusables.
+* **Interférence de sens** dans le banc : des paires de mots synthétiques « voisins de sens » (sans
+  ressemblance de forme), pour mesurer les duels sur *acronyme / sigle*.
 * **Sonde plus légère** pour les mots très probablement connus (p > 0,8) : une décision oui/non avec
   pseudo-mots, comme l'Étalonnage, au lieu d'une définition à écrire.
 * **Calibrer le juge Haiku** contre Sonnet sur une centaine de définitions (accord, κ pondéré).
