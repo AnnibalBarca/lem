@@ -69,6 +69,23 @@ headless, sur l'abonnement. Les données vont dans `~/.lem/` (jamais dans le dé
 8. **Optimiseur.** `lem optimiser --essai` : rapporte le nombre de révisions espacées par trace et, s'il y
    en a assez, la perte récente avant/après.
 
+## Ensuite : tu prends le relais
+
+Une fois la mise en service faite et le rapport écrit, tu deviens la session de travail principale sur lem.
+- **Priorités**, dans l'ordre :
+  1. tout ce qui accroche à l'usage réel sur le Mac (rendu, latences, juge) ;
+  2. le dosage du moteur des Cartes sur mon journal réel (après quelques sessions : Atlas, section
+     « Mémoire », `lem optimiser --essai`) ;
+  3. les pistes du § 6 de `docs/rapport-moteur.md`.
+- **Toute modification du moteur passe par le banc avant d'être adoptée** :
+  `lem simuler --graines 3 --eleve moyen` (et faible, fort) ; compare à graine égale, consigne le résultat
+  dans `docs/rapport-moteur.md`, n'adopte que ce qui améliore les mots retenus sans dégrader la carte.
+- **Ce qui n'est pas fait** et ne se fait pas sur le Mac : la distillation d'un correcteur de définitions
+  local (`docs/passation-distillation.md`). Elle demande un GPU : c'est pour le PC (RTX 5070 Ti). Sur le
+  Mac, le juge reste Claude Haiku en headless.
+- **Hors sujet pour l'instant** : téléphone et synchronisation (`docs/passation-mobile-sync.md`). Le Mac
+  d'abord.
+
 ## Règles
 
 - Ne change ni l'architecture (journal en ajout seul, état dérivé et rejouable), ni le design (monochrome ;
