@@ -53,7 +53,8 @@ def exemples() -> dict[str, list[dict]]:
 class Eleve(nn.Module):
     def __init__(self, base: str):
         super().__init__()
-        self.encodeur = AutoModel.from_pretrained(base)
+        # Poids en float32 (certaines bases sont enregistrées en float16) ; l'autocast gère la précision mixte.
+        self.encodeur = AutoModel.from_pretrained(base, torch_dtype=torch.float32)
         h = self.encodeur.config.hidden_size
         self.abandon = nn.Dropout(0.1)
         self.precision = nn.Linear(h, 5)
