@@ -41,7 +41,14 @@ logit P(connu | mot) = logit P_prior(mot) + Σ θ_d (d ∈ dimensions(mot)) + r�
   propagation, et c'est ce qui permet d'attaquer **au coût minimal**.
 * **Priorité d'apprentissage** = (1 − p) × zone proximale (les mots flous comme *thuriféraire* sont les
   moins chers à consolider) × utilité (fréquence, intérêt du domaine) × levier (mots inconnus de la
-  même famille morphologique).
+  même famille morphologique) + exploration × p(1 − p) × utilité (ce qu'une sonde apprendrait sur toi).
+* **Rejouable.** Chaque mise à jour est écrite dans la table `observation` ; `CarteConnaissance.rejouer`
+  reconstruit tout, en prenant pour chaque observation issue d'une note la meilleure note disponible.
+  Seules les observations qui disent ce que tu savais **sans étude** (sonde, vérification, Étalonnage,
+  Bombe, Mot ou pas mot) corrigent les θ ; la révision d'un mot qu'on étudie ne corrige que ce mot
+  (sinon chaque révision réussie ferait croire que tout le lexique est connu).
+* **Calibrage** : la cible compte des lemmes — une graphie une fois, sans sigles ni composés de
+  fréquence inconnue.
 
 ### 1.2 FSRS (v6, `py-fsrs`) par trace
 
@@ -50,7 +57,34 @@ Une trace = (entrée, sens, direction) : `recep` (mot → sens, vocabulaire pass
 disponible (humain > Jev > Claude > auto-évaluation > embedding). Le fuzzing est désactivé pour que
 le rejeu soit déterministe. Une notation différée se contente donc de rejouer.
 
-### 1.3 Unités : lemme, polysémie, expressions, concepts
+Trois traces : `recep`, `prod` et `ortho` (graphie). Pas d'étapes d'apprentissage FSRS dans la session
+par défaut (cf. § 1.4). Paramètres FSRS **propres à chaque trace**, ajustés sur ton journal chaque
+semaine par `lem/memory/optimiseur.py` (sans torch : descente par coordonnées, pénalité vers les
+défauts, adoption seulement si les révisions les plus récentes sont mieux prédites).
+
+### 1.4 Le planificateur de session (`lem/memory/planificateur.py`)
+
+Le choix de la carte suivante se fait carte après carte, à partir de quatre réservoirs : cartes en
+attente dans la session, révisions dues, mots nouveaux classés, budget.
+* **Sonde.** Un mot nouveau commence par une carte (mot → sens, ou sens → mot en mode « prod »).
+  Réussie : le mot est connu, il ne coûte qu'une carte et ne revient qu'une fois, dans 30 à 60 jours
+  (statut `connu_sonde`) ; vérifié, il est retiré (`verifie`) ; raté à la vérification, il entre dans
+  le parcours normal. Ratée : le mot est appris (duel 3 cartes plus loin, sens → mot 10 cartes et
+  5 minutes plus loin, puis FSRS). Un sens → mot qui n'a pas eu le temps de venir ouvre la session
+  suivante.
+* **Sœurs.** Jamais deux cartes du même mot à moins de 4 cartes d'intervalle.
+* **Budget.** Mots nouveaux = (capacité de la session − charge de révisions des 7 jours) / 6 ; les
+  sondes réussies ne le consomment pas.
+* **Intention.** équilibre, découvrir (budget maximal, seules les révisions pressantes), consolider
+  (pas de nouveaux, et les fragiles des deux jours à venir), confusables (mots reliés à ceux que tu
+  apprends), graphie.
+
+Chaque réglage a été choisi au **banc d'essai** (`lem/simulation.py`, `lem simuler`) : un élève simulé
+dont on connaît la vérité (ce qu'il sait au départ, structuré par domaine, origine et morphème ; une
+mémoire qui oublie et se renforce comme le suppose FSRS), joué par le vrai moteur avec une horloge
+simulée. Résultats et expériences : [docs/rapport-moteur.md](docs/rapport-moteur.md).
+
+### 1.5 Unités : lemme, polysémie, expressions, concepts
 
 `entree` (mot, composé, expression, nom propre, mot étranger) → `sens` (polysémie) → `concept`
 (« les sages de la rue Montpensier » et « Conseil constitutionnel » pointent vers le même concept).
@@ -99,6 +133,12 @@ tes notes et celles de Claude, puis on bascule.
 
 ### 2.2 Aujourd'hui : Claude Code en mode headless, sur ton abonnement
 
+**En direct** : `/juge auto` choisit le modèle local d'Ollama s'il est présent (PC avec GPU), sinon
+Claude Haiku (`claude -p`, une définition par appel, verdict quelques secondes plus tard pendant que
+l'écran reste libre). Sur le Mac, rien de plus en mémoire à côté de bge-m3 et Whisper.
+
+**En différé** :
+
 `lem noter` (ou le menu) envoie les définitions par lots de 20 à `claude -p --output-format json
 --model sonnet`. Pour chaque définition, le verdict revient en JSON validé : sens visé, précision 1–5,
 erreur ∈ taxonomie, mot réellement défini, confiance. Il est écrit dans `notation` sans rien écraser,
@@ -146,7 +186,7 @@ type, état mémoire, fréquence, longueur).
 ### 5.1 Cartes
 
 Tu vois un mot, tu écris sa définition ou des synonymes. Tu vois une définition, tu écris le mot.
-Les **duels de confusables** suivent chaque mot nouveau.
+Les **duels de confusables** suivent chaque mot appris. L'ordre des cartes : § 1.4.
 
 Les grappes de confusables (`lem/confusables.py`) réunissent trois voisinages :
 * formel : orthographe, affixes, phonétique ;
@@ -293,7 +333,9 @@ Tout tourne en local sur le Mac. Le seul service extérieur est Claude, en fin d
    (seuils de proximité et de température mesurés sur la base réelle). Prompt prêt pour un Claude
    Code local : `docs/claude-local.md`.
 4. Étalonnage initial (environ 150 questions), puis 2 à 3 semaines de jeu.
-5. Optimiseur FSRS sur ton journal (paramètres personnels).
+5. ✅ Moteur v2 : planificateur, sonde et vérification unique, carte rejouable, optimiseur FSRS par
+   trace, juge Haiku en direct, banc d'essai. À valider sur ton journal réel après quelques semaines
+   (`lem optimiser --essai`, Atlas).
 6. Intrus, DAT, Cemantix branché ; carte braille du lexique.
 7. Mots fléchés ; Morphalou ; dessin à la souris ; carte visuelle du lexique ; client Jev. Tous en
    terminal, avec le même soin de design que le reste.

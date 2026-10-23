@@ -24,7 +24,7 @@ ta mémoire.
 
 | Jeu | Ce qu'il fait | Ce qu'il mesure |
 |---|---|---|
-| **Cartes** | mot → sens (texte libre ou synonymes), sens → mot (Tab = une lettre), duels de confusables | précision, type d'erreur, mot réellement défini, lettres nécessaires |
+| **Cartes** | mot → sens (texte libre ou synonymes), sens → mot (Tab = une lettre), duels de confusables ; chaque mot nouveau est d'abord **sondé** | précision, type d'erreur, mot réellement défini, lettres nécessaires |
 | **Bombe** | façon JKLM : une suite de lettres, un mot. Modes libre / apprentissage / confusables, répétition intelligente, extension vers la cible | vocabulaire actif spontané, disponibilité par suite, confusions |
 | **Mémoire verbale** | façon Human Benchmark, avec les mots les plus étranges du français, et capture d'images mentales | mémoire de reconnaissance, effet de l'imagerie (mode expérience) |
 | **Mot ou pas mot** | décision lexicale chronométrée contre des pseudo-mots | temps d'accès lexical |
@@ -42,6 +42,24 @@ plus loin, puis à intervalles espacés, sur une trace FSRS dédiée.
 sous macOS) écrit dans les champs comme un clavier. lem repère la saisie dictée (insertion d'un bloc)
 et en tient compte : la graphie et le recopiage se tapent au clavier, une faute écrite par la dictée
 n'est jamais comptée comme la tienne, et les temps de réponse sont séparés (clavier / dictée).
+
+**Le moteur des Cartes** ([rapport](docs/rapport-moteur.md)). La carte suivante est choisie à chaque fois :
+* un mot nouveau est d'abord **sondé** (« le connais-tu ? » ; Entrée seule = je ne sais pas). Connu, il ne
+  coûte qu'une carte et revient **une seule fois, dans 1 à 2 mois** ; sinon il est appris : duel de
+  confusables quelques cartes plus loin, « sens → mot » dix cartes plus loin, puis FSRS ;
+* les mots nouveaux sont choisis pour leur utilité (fréquence, `lem interets science=2`), le levier de
+  leurs morphèmes, et ce que la sonde apprendra sur toi ; leur nombre suit la charge de révisions ;
+* deux cartes d'un même mot ne se suivent jamais ; une révision ratée revient à la session suivante ;
+* `/intention equilibre | decouvrir | consolider | confusables | graphie`, `/minutes 20` ;
+* les paramètres FSRS s'ajustent à ta mémoire chaque semaine, en fond (`lem optimiser` pour le faire
+  à la main), un jeu par type de carte.
+
+Sur un élève simulé (`lem simuler`), ce moteur retient 16 à 90 % de mots de plus par heure que le
+précédent, et sa carte de ce que tu sais devient juste (score de Brier 0,4–0,7 → 0,08).
+
+**Juge des définitions en direct** : `/juge auto` (défaut) prend un modèle Ollama s'il est installé (PC
+avec GPU), sinon **Claude Haiku** en headless sur ton abonnement (Mac : rien de plus en mémoire à côté
+de bge-m3 et Whisper). `/juge haiku`, `/juge sonnet`, `/juge qwen3:8b`, `/juge non`.
 
 Dans tous les jeux : `/aide`, `/domaine science,droit`, `/etat flous`, `/vies 5`, `/mode confusables`, `/params`…
 Les réglages sont enregistrés dans la base.

@@ -11,6 +11,7 @@
   lem noter [--modele M]   notation différée par Claude Code headless (sonnet par défaut)
   lem nettoyer             retire les gabarits « Définition manquante… » (base déjà ingérée)
   lem rebuild              rejoue tout le journal (FSRS + carte de connaissance)
+  lem interets science=2   poids par domaine (sous-domaines compris) pour le choix des mots nouveaux
   lem optimiser            ajuste les paramètres FSRS sur ton journal (aussi fait chaque semaine en fond)
   lem simuler              banc d'essai du moteur sur un élève simulé
   lem atlas                imprime l'atlas dans le terminal
@@ -163,6 +164,25 @@ def cmd_nettoyer(args) -> None:
         print("→ `lem index` (avec les mêmes options) recalcule leurs vecteurs.")
 
 
+def cmd_interets(args) -> None:
+    """lem interets science=2 droit=0.5 … ; sans argument : affiche ; « aucun » : efface."""
+    from lem.db import domaines_descendants, get_reglage, set_reglage
+
+    ctx = _ctx(args)
+    actuels = dict(get_reglage(ctx.con, "interets", {}) or {})
+    if args.poids == ["aucun"]:
+        actuels = {}
+    for item in args.poids if args.poids != ["aucun"] else []:
+        nom, _, w = item.partition("=")
+        nom = nom.strip().lower()
+        if not domaines_descendants(ctx.con, [nom]):
+            sys.exit(f"domaine inconnu : {nom}")
+        actuels[nom] = float(w or 1)
+    set_reglage(ctx.con, "interets", actuels)
+    ctx.con.commit()
+    print("intérêts : " + (", ".join(f"{k} ×{v:g}" for k, v in actuels.items()) or "aucun (tous les domaines à égalité)"))
+
+
 def cmd_optimiser(args) -> None:
     from lem.memory.optimiseur import MIN_REVISIONS, optimiser
 
@@ -249,6 +269,9 @@ def main(argv: list[str] | None = None) -> None:
     n.set_defaults(f=cmd_noter)
     sp.add_parser("nettoyer", help="retire les gabarits « Définition manquante… » d'une base déjà ingérée").set_defaults(f=cmd_nettoyer)
     sp.add_parser("rebuild").set_defaults(f=cmd_rebuild)
+    it = sp.add_parser("interets", help="poids par domaine pour le choix des mots nouveaux : science=2 droit=0.5")
+    it.add_argument("poids", nargs="*")
+    it.set_defaults(f=cmd_interets)
     o = sp.add_parser("optimiser", help="ajuste les paramètres FSRS sur ton journal (un jeu par type de carte)")
     o.add_argument("--essai", action="store_true", help="mesurer sans adopter")
     o.set_defaults(f=cmd_optimiser)
