@@ -16,6 +16,7 @@
   lem simuler              banc d'essai du moteur sur un élève simulé
   lem suites [--seuil 50]  les suites rares de la Bombe (sub-N) : combien, lesquelles, tes progrès
   lem atlas                imprime l'atlas dans le terminal
+  lem mot <forme>          le profil d'un mot : ses six mémoires (reconnu, défini, retrouvé, écrit, trouvé, encodé)
 """
 
 from __future__ import annotations
@@ -250,7 +251,50 @@ def cmd_atlas(args) -> None:
 
     from lem.atlas import rapport
 
-    Console().print(rapport(_ctx(args).con))
+    ctx = _ctx(args)
+    Console().print(rapport(ctx.con, ctx.lexique))
+
+
+def cmd_mot(args) -> None:
+    from rich.console import Console
+    from rich.text import Text
+
+    from lem.profil import LIBELLES, MEMOIRES, profils
+    from lem.tui.theme import BLANC, GRIS, SOMBRE, barre
+
+    ctx = _ctx(args)
+    ids = [r[0] for r in ctx.con.execute("SELECT id FROM entree WHERE forme = ?", (args.forme,))]
+    if not ids:
+        ids = [r[0] for r in ctx.con.execute("SELECT DISTINCT entree_id FROM forme WHERE forme = ?",
+                                             (args.forme.lower(),))]
+    if not ids:
+        print(f"« {args.forme} » n'est pas dans le lexique")
+        return
+    ctx.carte                                   # base ancienne : mise à niveau d'abord
+    for eid, x in profils(ctx.con, ids).items():
+        t = Text(f"{x.forme}\n", style=f"bold {BLANC}")
+        for m in MEMOIRES:
+            v = getattr(x, m)
+            t.append(f"  {LIBELLES[m]:<14}", style=BLANC)
+            if v is None:
+                t.append("pas encore mesuré\n", style=SOMBRE)
+            else:
+                t += barre(v, 20)
+                t.append(f" {v:.0%}\n", style=GRIS)
+        d = x.detail
+        if d:
+            infos = []
+            if "trouve" in d:
+                n, med = d["trouve"]
+                infos.append(f"trouvé {n} fois" + (f", en {med / 1000:.1f} s".replace(".", ",") if med else ""))
+            if "reconnu" in d:
+                infos.append(f"reconnu {d['reconnu'][0]} fois sur {d['reconnu'][1]}")
+            if "images" in d:
+                infos.append(f"{d['images']} image(s) mentale(s)")
+            if "statut" in d:
+                infos.append(d["statut"].replace("_", " "))
+            t.append("  " + " · ".join(infos) + "\n", style=GRIS)
+        Console().print(t)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -306,6 +350,9 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--params", help="paramètres du jeu de Cartes, en JSON")
     s.set_defaults(f=cmd_simuler)
     sp.add_parser("atlas").set_defaults(f=cmd_atlas)
+    mo = sp.add_parser("mot", help="le profil d'un mot : ses six mémoires")
+    mo.add_argument("forme")
+    mo.set_defaults(f=cmd_mot)
     su = sp.add_parser("suites", help="les suites rares de la Bombe (sub-N) et tes progrès au Syllabaire")
     su.add_argument("--seuil", type=int, default=50)
     su.add_argument("--minimum", type=int, default=3)

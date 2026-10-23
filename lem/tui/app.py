@@ -377,6 +377,10 @@ class EcranPartie(Screen):
             self._accents(texte.strip("/ ").split()[1:])
             self.query_one("#saisie", Input).value = ""
             return True
+        if texte.strip("/ ").lower().split()[:1] == ["mot"]:
+            self._mot(texte.strip("/ ").split(maxsplit=1)[1:])
+            self.query_one("#saisie", Input).value = ""
+            return True
         if texte.strip("/ ").lower().split()[:1] == ["juge"]:
             self._juge(texte.strip("/ ").split()[1:])
             self.query_one("#saisie", Input).value = ""
@@ -407,6 +411,25 @@ class EcranPartie(Screen):
         etat = accents_tolerants(self.ctx.con)
         self.maj("retour", Text("accents manquants : " + ("tolérés (pas une faute)" if etat else "comptés comme fautes"),
                                 style=BLANC))
+
+    def _mot(self, args: list[str]) -> None:
+        """/mot <forme> — les six mémoires d'un mot (lem.profil)."""
+        from lem.profil import bande, profils
+
+        if not args:
+            self.maj("retour", Text("/mot <forme>", style=GRIS))
+            return
+        ids = [r[0] for r in self.ctx.con.execute(
+            "SELECT DISTINCT entree_id FROM forme WHERE forme = ? LIMIT 4", (args[0].strip().lower(),))]
+        if not ids:
+            self.maj("retour", Text(f"« {args[0]} » n'est pas dans le lexique", style=GRIS))
+            return
+        t = Text()
+        for i, p in enumerate(profils(self.ctx.con, ids).values()):
+            if i:
+                t.append("\n")
+            t.append_text(bande(p))
+        self.maj("retour", t)
 
     def _juge(self, args: list[str]) -> None:
         """/juge auto | haiku | sonnet | <modèle Ollama> | non — juge en direct des définitions (réglage global)."""
@@ -1228,7 +1251,7 @@ class EcranAtlas(Screen):
     def on_mount(self) -> None:
         from lem.atlas import rapport
 
-        self.query_one("#corps", Static).update(rapport(self.app.ctx.con))
+        self.query_one("#corps", Static).update(rapport(self.app.ctx.con, self.app.ctx.lexique))
 
 
 # ── Notation par Claude ─────────────────────────────────────────────────────────────────────────

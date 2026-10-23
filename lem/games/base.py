@@ -124,6 +124,7 @@ def executer_commande(jeu: Jeu, params: dict, texte: str) -> ResultatCommande:
     if nom in {"aide", "help", "?"}:
         lignes = [f"/{p.nom} <{p.type.__name__}>  {p.libelle}{' — ' + p.aide if p.aide else ''}" for p in jeu.params]
         return ResultatCommande(True, "\n".join(lignes + ["/accents oui|non  accents manquants tolérés (tous les jeux)",
+                                                         "/mot <forme>  les six mémoires d'un mot",
                                                          "/params  état courant", "/quitter"]))
     if nom == "params":
         return ResultatCommande(True, "  ".join(f"{p.nom}={p.afficher(params.get(p.nom))}" for p in jeu.params))
