@@ -170,3 +170,46 @@ async def test_bombe_saisie_gardee_si_refusee(tmp_path):
             await pilot.pause(0.02)
         assert e.query_one("#saisie", Input).value == ""
         assert "1ʳᵉ fois" in str(e.query_one("#retour").render())
+
+
+async def test_cartes_session_complete_sonde_et_bilan(tmp_path):
+    """Une session entière au pilote : sondes (Entrée seule = je ne sais pas), notes, bilan de fin."""
+    from lem.cli import main
+    from lem.contexte import Contexte
+    from lem.games import REGISTRE
+    from lem.tui.app import EcranCartes, LemApp
+
+    chemin = tmp_path / "t.sqlite"
+    main(["--db", str(chemin), "demo", "--sans-jeu"])
+    ctx = Contexte(chemin)
+    ctx.sauver_params(REGISTRE["cartes"], {**REGISTRE["cartes"].defauts(), "nouveaux": 2, "minutes": 3})
+    app = LemApp(ctx)
+    async with app.run_test(size=(110, 50)) as pilot:
+        await pilot.pause(1.6)
+        await pilot.press("enter", "j")
+        ecran = app.screen
+        assert isinstance(ecran, EcranCartes)
+        while not ecran.pret:
+            await pilot.pause(0.05)
+        assert ecran.item.role == "sonde"
+        assert "le connais-tu" in str(ecran.query_one("#stimulus").render())
+        for _ in range(60):
+            if ecran.item is None:
+                break
+            if ecran.resultat is None:
+                if ecran.item.exercice == "prod":
+                    await pilot.press(*ecran.item.forme, "enter")
+                elif ecran.item.exercice == "discrimination":
+                    await pilot.press("enter")
+                else:
+                    await pilot.press("enter")                     # sonde : je ne sais pas
+            else:
+                await pilot.press("enter")                         # note proposée
+            await pilot.pause(0.15)
+        await pilot.pause(1.0)
+        assert ecran.item is None
+        bilan = str(ecran.query_one("#stimulus").render())
+        assert "mots appris" in bilan and "cartes" in bilan
+    con = ctx.con
+    roles = {r[0] for r in con.execute("SELECT json_extract(data, '$.role') FROM evenement WHERE type = 'reponse'")}
+    assert "sonde" in roles
