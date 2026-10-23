@@ -129,9 +129,8 @@ def test_sonde_ratee_programme_sens_vers_mot_meme_a_la_session_suivante(con, car
 def test_optimiseur_apprend_et_ne_s_emballe_pas():
     """Sur un élève simulé, l'optimiseur améliore la prédiction des révisions récentes ; sans assez de
     données, il ne touche à rien."""
-    from lem.db import connect, get_reglage
+    from lem.db import connect
     from lem.memory.optimiseur import optimiser
-
     from lem.simulation import simuler
 
     con = connect(":memory:")

@@ -175,7 +175,7 @@ class Planificateur:
             # suite : retour du sens à l'étape FSRS, duel, puis « sens → mot » plus tard.
             self.entres += 1
             self.en_cours.add(e)
-            if echeance is not None:
+            if echeance is not None and echeance - t <= HORIZON:      # étape FSRS courte, si on en a réglé
                 self.ajouter(Tache(tache.exercice, e, tache.sens_id, "apprentissage", pret_a=echeance,
                                    apres=self.n + ECART_SOEURS))
             if self.duels and a_des_voisins:

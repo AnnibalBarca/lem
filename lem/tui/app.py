@@ -462,7 +462,7 @@ class EcranCartes(EcranPartie):
         roles = {"sonde": "nouveau ?", "apprentissage": "en apprentissage", "verification": "vérification",
                  "reprise": "reprise", "revision": "révision"}
         plan = self.partie.plan
-        t = Text(f"CARTES  ", style="bold") + Text(f"{ex.get(self.item.exercice, '')}", style=BLANC)
+        t = Text("CARTES  ", style="bold") + Text(ex.get(self.item.exercice, ""), style=BLANC)
         t += Text(f"   {roles.get(self.item.role, '')}", style="#5f87d7" if self.item.role in ("sonde", "apprentissage")
                   else GRIS)
         t += Text(f"   {self.faits} faites · ~{self.partie.restant()} à venir", style=GRIS)
