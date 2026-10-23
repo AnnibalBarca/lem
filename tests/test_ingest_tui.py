@@ -89,7 +89,7 @@ async def test_tui_parcours(tmp_path, monkeypatch):
         await pilot.press(*"/mode libre", "enter")
         await pilot.press(*"zzzz", "enter")
         await pilot.press("escape", "escape")
-        await pilot.press("down", "down", "down", "down", "enter")   # Atlas
+        await pilot.press("down", "down", "down", "down", "down", "enter")   # Atlas
         await pilot.press("escape")
     con = connect(chemin)
     assert con.execute("SELECT COUNT(*) FROM session").fetchone()[0] == 2

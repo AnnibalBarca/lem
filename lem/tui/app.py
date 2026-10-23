@@ -94,6 +94,7 @@ def ligne_proximite(prox: Proximite | None, mot: str = "") -> Text:
 MENU = [
     ("cartes", "Cartes", "définir · retrouver · distinguer"),
     ("bombe", "Bombe", "des lettres, un mot, avant l'explosion"),
+    ("syllabaire", "Syllabaire", "les suites rares de la Bombe, par cœur"),
     ("memoire", "Mémoire verbale", "vu ou nouveau ? les mots les plus étranges"),
     ("mot_ou_pas", "Mot ou pas mot", "décision lexicale chronométrée"),
     ("etalonnage", "Étalonnage", "placer ta carte de connaissance"),
@@ -275,7 +276,7 @@ class Reglages(Screen):
             self.app.pop_screen()
 
     def action_jouer(self) -> None:
-        ecran = {"cartes": EcranCartes, "bombe": EcranBombe, "memoire": EcranMemoire,
+        ecran = {"cartes": EcranCartes, "bombe": EcranBombe, "syllabaire": EcranSyllabaire, "memoire": EcranMemoire,
                  "mot_ou_pas": EcranDecision, "etalonnage": EcranDecision}[self.jeu.id]
         self.app.push_screen(ecran(self.jeu, dict(self.params)))
 
@@ -866,6 +867,167 @@ class EcranBombe(EcranPartie):
         self.fini = True
         self.maj("stimulus", logo.rangee("fin"))
         self.maj("minuterie", Text(f"score {self.partie.score:.1f} — Entrée pour rejouer, Échap pour le menu", style=BLANC))
+
+
+# ── Syllabaire (entraînement de la Bombe) ───────────────────────────────────────────────────────
+
+NOTES_SUITE = {1: "séchée", 2: "hésitante", 3: "sûre", 4: "réflexe"}
+
+
+def exemple_souligne(exemple: str, suite: str, style: str) -> Text:
+    """La forme, avec la suite soulignée (quand les accents ne décalent pas les lettres)."""
+    from lem.texte import normaliser
+
+    t = Text(exemple, style=style)
+    n = normaliser(exemple)
+    i = n.find(suite)
+    if i >= 0 and len(n) == len(exemple):
+        t.stylize("underline", i, i + len(suite))
+    return t
+
+
+class EcranSyllabaire(EcranPartie):
+    def compose(self) -> ComposeResult:
+        with Center():
+            with Vertical(id="zone"):
+                yield Static(id="entete")
+                with Center():
+                    yield Static(id="stimulus")
+                yield Static(id="minuterie")
+                yield Input(id="saisie", placeholder="tous les mots que tu trouves — Entrée seule : fini")
+                yield Static(id="retour")
+                yield VerticalScroll(Static(id="detail"))
+        yield Footer()
+
+    def construire(self):
+        from lem.games.syllabaire import PartieSyllabaire
+
+        return PartieSyllabaire(self.ctx.con, self.params, self.ctx.carte, self.session_id, lexique=self.ctx.lexique)
+
+    def demarrer(self) -> None:
+        self.etape = "jeu"               # jeu | bilan | fin
+        if not hasattr(self, "minuteur"):
+            self.minuteur = self.set_interval(0.1, self._tic)
+        self._suivante()
+
+    def reconfigurer(self) -> None:
+        self.en_fond(self.partie.reconfigurer, lambda _: self._suivante())
+
+    def _suivante(self) -> None:
+        tour = self.partie.suivante()
+        if tour is None:
+            self._fin()
+            return
+        self.etape = "jeu"
+        self.t_tour = time.monotonic()
+        self.chrono.reset()
+        self.maj("stimulus", logo.rangee(tour.suite))
+        self.maj("retour", Text(""))
+        self.maj("detail", Text(""))
+        self._entete()
+        self.query_one("#saisie", Input).value = ""
+
+    def _entete(self) -> None:
+        t, p = self.partie.tour, self.params
+        quoi = "nouvelle" if t.nouvelle else "retour" if t.retour else "révision"
+        e = Text("SYLLABAIRE  ", style="bold") + Text(quoi, style=BLANC)
+        e += Text(f"   sub-{p['seuil']} · {t.n} mots · encore {self.partie.restant()}", style=GRIS)
+        self.maj("entete", e)
+
+    def _tic(self) -> None:
+        if self.partie is None or self.etape != "jeu" or self.partie.tour is None:
+            return
+        if self.occupe:
+            self.t_tour += 0.1
+            return
+        duree = self.params["duree"]
+        ecoule = time.monotonic() - self.t_tour
+        frac = max(0.0, 1 - ecoule / duree)
+        self.maj("minuterie", barre(frac, 60, BLANC if frac > 0.25 else "#ff5f5f"))
+        if ecoule >= duree:
+            self._terminer()
+
+    def _terminer(self) -> None:
+        self.etape = "attente"
+        duree_ms = int((time.monotonic() - self.t_tour) * 1000)
+        self.en_fond(lambda: self.partie.terminer(duree_ms), self._bilan)
+
+    def _bilan(self, b) -> None:
+        self.etape = "bilan"
+        self.maj("minuterie", Text(""))
+        tete = Text(NOTES_SUITE[b.note], style=f"bold {BLANC}")
+        t = self.partie.tour
+        if t.premiere_ms is not None:
+            tete.append(f"   premier mot en {t.premiere_ms / 1000:.1f} s".replace(".", ","), style=GRIS)
+        tete.append(f"   tu en as {b.etendue[0]} sur {b.etendue[1]}", style=GRIS)
+        jours = f"{b.jours:.0f} j" if b.jours >= 1 else "cette session" if b.note <= 2 else "demain"
+        tete.append(f"   revient : {jours}", style=GRIS)
+        self.maj("retour", tete)
+        d = Text()
+        if b.ancre:
+            d.append("ancre  ", style=GRIS)
+            d += exemple_souligne(b.ancre.exemple, b.suite, f"bold {BLANC}")
+            if b.definition_ancre:
+                d.append(f" — {b.definition_ancre[:110]}", style=GRIS)
+            d.append("\n\n")
+        styles = {"trouve": f"bold {BLANC}", "deja": BLANC, "manque": GRIS}
+        for i, x in enumerate(b.lemmes[:80]):
+            d += exemple_souligne(x.exemple, b.suite, styles[x.statut])
+            d.append("   ")
+        if len(b.lemmes) > 80:
+            d.append(f"… et {len(b.lemmes) - 80} autres", style=SOMBRE)
+        d.append("\n\n")
+        d.append("gras", style=f"bold {BLANC}")
+        d.append(" trouvés maintenant · ", style=SOMBRE)
+        d.append("blanc", style=BLANC)
+        d.append(" trouvés un autre jour · ", style=SOMBRE)
+        d.append("gris", style=GRIS)
+        d.append(" à apprendre — Entrée : suite suivante", style=SOMBRE)
+        self.maj("detail", d)
+
+    def _fin(self) -> None:
+        self.etape = "fin"
+        s = self.partie.bilan_session()
+        self.maj("stimulus", logo.rangee("fin"))
+        self.maj("minuterie", Text(""))
+        self.maj("retour", Text(f"{s['suites']} suites · {s['sures']} sûres · {s['hesitantes']} hésitantes · "
+                                f"{s['seches']} séchées", style=BLANC))
+        self.maj("detail", Text("Entrée : d'autres suites nouvelles · Échap : menu", style=GRIS))
+
+    def on_input_submitted(self, ev: Input.Submitted) -> None:
+        texte = ev.value.strip()
+        if texte and self.commande(texte):
+            return
+        if not self.pret:
+            return
+        if self.etape == "bilan":
+            ev.input.value = ""
+            self._suivante()
+        elif self.etape == "fin":
+            ev.input.value = ""
+            self.partie.encore()
+            self._suivante()
+        elif self.etape == "jeu":
+            if not texte:
+                self._terminer()
+                return
+            lat = int((time.monotonic() - self.t_tour) * 1000)
+            _, frappe = self.chrono.mesures()
+            self.en_fond(lambda: self.partie.proposer(texte, lat, frappe), lambda r: self._reponse(r, texte))
+
+    def _reponse(self, r, texte: str) -> None:
+        if r.valide:
+            t = Text("✓ ", style=f"bold {BLANC}") + Text(r.forme, style=f"bold {BLANC}")
+            if r.inedit:
+                t.append("   premier jamais trouvé", style=GRIS)
+            self.maj("retour", t)
+            self.query_one("#saisie", Input).value = ""
+            self.chrono.reset()
+            self.maj("detail", Text("   ".join(self.partie.tour.donnes), style=BLANC))
+        elif r.graphie:
+            self.maj("retour", ligne_graphie(r.graphie))
+        else:
+            self.maj("retour", Text(r.message, style=GRIS))
 
 # ── Mémoire verbale ─────────────────────────────────────────────────────────────────────────────
 

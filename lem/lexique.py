@@ -40,6 +40,7 @@ class Lexique:
     def __init__(self, con: sqlite3.Connection):
         from lem.vecteurs import DOSSIER_CACHE, _chemin_base
 
+        self.racine: Path | None = None        # dossier du cache sur disque (None : base en mémoire)
         base = _chemin_base(con)
         if not base:
             self._construire(con, None)
@@ -51,6 +52,7 @@ class Lexique:
                 shutil.rmtree(ancien, ignore_errors=True)
             self._construire(con, racine)
         self._charger(racine)
+        self.racine = racine
 
     # -- construction ------------------------------------------------------------------------------
     def _construire(self, con: sqlite3.Connection, racine: Path | None) -> None:

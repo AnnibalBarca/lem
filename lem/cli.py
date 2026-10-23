@@ -14,6 +14,7 @@
   lem interets science=2   poids par domaine (sous-domaines compris) pour le choix des mots nouveaux
   lem optimiser            ajuste les paramètres FSRS sur ton journal (aussi fait chaque semaine en fond)
   lem simuler              banc d'essai du moteur sur un élève simulé
+  lem suites [--seuil 50]  les suites rares de la Bombe (sub-N) : combien, lesquelles, tes progrès
   lem atlas                imprime l'atlas dans le terminal
 """
 
@@ -214,6 +215,24 @@ def cmd_simuler(args) -> None:
         print(json.dumps(asdict(r), ensure_ascii=False, indent=2))
 
 
+def cmd_suites(args) -> None:
+    from lem.games.syllabaire import etats_suites
+    from lem.suites import IndexSuites
+
+    ctx = _ctx(args)
+    ix = IndexSuites(ctx.lexique)
+    print("suites de 2 et 3 lettres, par nombre de mots valides (ni noms propres ni sigles) :")
+    for tranche, n in ix.repartition().items():
+        print(f"  {tranche:>8} mots : {n:>6} suites")
+    rares = ix.rares(args.seuil, minimum=args.minimum)
+    etats = etats_suites(ctx.con)
+    vues = [s for s, _ in rares if s in etats]
+    sures = [s for s in vues if (etats[s].card.stability or 0) >= 21]
+    print(f"sub-{args.seuil} (au moins {args.minimum} mots) : {len(rares)} suites · {len(vues)} travaillées "
+          f"· {len(sures)} sûres (stabilité ≥ 21 j)")
+    print("  " + "  ".join(f"{s.upper()}:{n}" for s, n in rares[: args.exemples]))
+
+
 def cmd_rebuild(args) -> None:
     from lem.memory import scheduler
 
@@ -287,6 +306,11 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--params", help="paramètres du jeu de Cartes, en JSON")
     s.set_defaults(f=cmd_simuler)
     sp.add_parser("atlas").set_defaults(f=cmd_atlas)
+    su = sp.add_parser("suites", help="les suites rares de la Bombe (sub-N) et tes progrès au Syllabaire")
+    su.add_argument("--seuil", type=int, default=50)
+    su.add_argument("--minimum", type=int, default=3)
+    su.add_argument("--exemples", type=int, default=30)
+    su.set_defaults(f=cmd_suites)
 
     args = ap.parse_args(argv)
     (getattr(args, "f", None) or cmd_jouer)(args)
