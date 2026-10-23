@@ -157,6 +157,10 @@ class PartieCartes:
         exclus = () if p.get("noms_propres") else TYPES_HORS_JEU
         self._hors_jeu = {r[0] for r in self.con.execute(
             f"SELECT id FROM entree WHERE type IN ({', '.join('?' * len(exclus))})", exclus)} if exclus else set()
+        # Des mots, pas des locutions (« chaudière à œufs », « détournement de mineur »), sauf /locutions oui.
+        if not p.get("locutions"):
+            self._hors_jeu |= {r[0] for r in self.con.execute(
+                "SELECT id FROM entree WHERE type = 'expression' OR instr(forme, ' ') > 0")}
         vivier = [r for r in vivier if r["type"] not in exclus]
 
         # Révisions : dues maintenant (consolider : aussi les fragiles des deux jours à venir).

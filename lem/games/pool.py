@@ -29,6 +29,7 @@ class Filtres:
     zipf_max: float | None = None
     longueur_min: int | None = None
     longueur_max: int | None = None
+    locutions: bool = False          # expressions et entrées de plusieurs mots : écartées sauf demande
     langue: str = "fr"
 
     def resume(self) -> str:
@@ -73,6 +74,8 @@ def selectionner(con: sqlite3.Connection, f: Filtres, limite: int | None = None,
                 WHERE s.entree_id = e.id AND sd.domaine_id IN ({', '.join('?' * len(dids))}))"""
         )
         args += dids
+    if not f.locutions and "expression" not in f.types:
+        where.append("e.type != 'expression' AND instr(e.forme, ' ') = 0")
     for col, vals in (("e.origine", f.origines), ("e.type", f.types)):
         if vals:
             where.append(f"{col} IN ({', '.join('?' * len(vals))})")

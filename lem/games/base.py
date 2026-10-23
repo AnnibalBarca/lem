@@ -68,6 +68,8 @@ PARAMS_FILTRES = [
     Param("etat", "État mémoire", str, "tous", "", choix=ETATS),
     Param("zipf_min", "Fréquence min (Zipf)", float, None, "0 = introuvable, 7 = « de »", 0, 8),
     Param("zipf_max", "Fréquence max (Zipf)", float, None, "", 0, 8),
+    Param("locutions", "Locutions", bool, False, "expressions et entrées de plusieurs mots (pomme de terre, au fil de "
+          "l'eau) ; écartées par défaut : on travaille les mots"),
 ]
 
 
@@ -79,6 +81,7 @@ def filtres_depuis(params: dict) -> Filtres:
         etat=params.get("etat") or "tous",
         zipf_min=params.get("zipf_min"),
         zipf_max=params.get("zipf_max"),
+        locutions=bool(params.get("locutions")),
     )
 
 

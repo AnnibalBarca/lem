@@ -327,3 +327,26 @@ def test_bombe_formes_soudees_1990(con, carte, rng):
     assert r.valide and r.forme == "néobabyloniennes" and r.entree_id == eid_
     b.invite.suite = "ba"
     assert not b.repondre("neobabylonienes", 900).valide         # soudure oui, faute non
+
+
+def test_locutions_ecartees_par_defaut(con):
+    from lem.games.base import filtres_depuis
+    from lem.games.pool import selectionner
+
+    formes = {r["forme"] for r in selectionner(con, filtres_depuis({}))}
+    assert "les sages de la rue Montpensier" not in formes and "acronyme" in formes
+    assert "ville-champignon" in formes                                    # un trait d'union : un mot
+    avec = {r["forme"] for r in selectionner(con, filtres_depuis({"locutions": True}))}
+    assert "les sages de la rue Montpensier" in avec
+    assert "les sages de la rue Montpensier" in {r["forme"] for r in selectionner(con, filtres_depuis({"type": ["expression"]}))}
+
+
+def test_cartes_sans_locutions_meme_en_revision(con, carte, rng):
+    from lem.journal import Evenement, ecrire
+    from lem.memory import scheduler
+
+    loc = con.execute("SELECT id FROM entree WHERE forme = 'les sages de la rue Montpensier'").fetchone()[0]
+    ecrire(con, None, Evenement("cartes", "reponse", entree_id=loc, trace="recep", reponse="x", note_auto=1))
+    scheduler.reconstruire(con)
+    partie = PartieCartes(con, params("cartes", nouveaux=200), carte, rng=rng)
+    assert loc in partie._hors_jeu
