@@ -102,6 +102,7 @@ Toutes les expériences portent sur les profils moyen et faible (et fort quand c
 | Optimiseur par trace, hebdomadaire | Mots retenus : +18 % (moyen), +34 % (faible), +16 % (fort) ; sens stable | Adopté, en fond à l'ouverture de lem |
 | Rétention visée 0,85 / 0,90 / 0,95 | 0,85 : plus de mots vus, moins de mots retrouvés ; 0,95 : l'inverse | 0,90 |
 | Sens → mot à 6 cartes et 2 min, ou à 10 cartes et 5 min | 10 et 5 min légèrement meilleur | 10 cartes, 5 min |
+| Duels de rappel sur tes confusions réelles (un mot tapé pour l'autre), 4 par session | Aucun gain, dans le bruit (−1 % à −5 %) | Non retenu : le duel à la découverte suffit dans ce modèle |
 
 **Une hypothèse réfutée** : j'avais classé « une carte ratée ne revient pas dans la session » comme le
 défaut n° 1 de v1. Le banc dit l'inverse pour ce modèle de mémoire : le réapprentissage immédiat est

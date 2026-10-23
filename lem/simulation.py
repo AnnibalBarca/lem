@@ -190,7 +190,9 @@ class Eleve:
 
         index = IndexFormel(con)
         formes = dict(con.execute("SELECT id, forme FROM entree").fetchall())
+        self.formes = formes
         self.par_forme = {f: e for e, f in formes.items()}
+        self.intrus = None
         self.voisins: dict[int, list[tuple[int, float]]] = {}
         if self.p.interference <= 0:
             return
@@ -247,11 +249,15 @@ class Eleve:
 
     def tenter(self, e: int, cote: str, t: float) -> tuple[bool, float]:
         """Une tentative de récupération. Renvoie (succès, R au moment de la tentative).
-        Une intrusion (le voisin s'impose) est une erreur, sans affaiblir la trace du mot lui-même."""
+        Une intrusion (le voisin s'impose) est une erreur, sans affaiblir la trace du mot lui-même ;
+        `self.intrus` dit quel voisin est sorti (l'élève le tape à la place)."""
+        self.intrus = None
         R = self.R(e, cote, t)
         ok = self.rng.random() < R
         if ok and self.rng.random() < self.confusion(e, cote, t):
-            self.distinguer(e, [n for n, _ in self.voisins.get(e, ())], self.p.gain_liste)
+            voisins = [n for n, _ in self.voisins.get(e, ())]
+            self.intrus = max(voisins, key=lambda n: self.R(n, cote, t)) if voisins else None
+            self.distinguer(e, voisins, self.p.gain_liste)
             return False, R
         self._renforcer(e, cote, t, ok)
         if ok:
@@ -366,8 +372,10 @@ def simuler(moteur_params: dict | None = None, *, jours: int = 30, minutes: floa
                     ok, R = eleve.tenter(e, cote, horloge["t"])
                     if it.exercice == "recep":
                         texte = "je le connais" if ok else "?"
-                    else:
-                        texte = it.forme if ok else "?"
+                    elif ok:
+                        texte = it.forme
+                    else:                                   # une intrusion se tape : le moteur la voit
+                        texte = eleve.formes.get(eleve.intrus, "?") if eleve.intrus else "?"
                 d_ok, d_ko = DUREES.get(it.exercice, (8.0, 6.0))
                 duree = (d_ok if ok else d_ko) + REVELATION
                 horloge["t"] += duree
