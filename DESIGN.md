@@ -7,7 +7,7 @@ recalcule (`lem rebuild`) :
 
 ```
           sources lexicales                     jeux (TUI)
-  Lexique · Wiktionnaire · JDM · wordfreq   cartes · bombe · mémoire · décision
+  Lexique · Wiktionnaire · JDM · wordfreq   cartes · bombe · syllabaire · mémoire · décision
                  │                                   │  écrivent
                  ▼                                   ▼
         ┌──────────────────┐               ┌────────────────────┐
@@ -84,7 +84,33 @@ dont on connaît la vérité (ce qu'il sait au départ, structuré par domaine, 
 mémoire qui oublie et se renforce comme le suppose FSRS), joué par le vrai moteur avec une horloge
 simulée. Résultats et expériences : [docs/rapport-moteur.md](docs/rapport-moteur.md).
 
-### 1.5 Unités : lemme, polysémie, expressions, concepts
+### 1.5 Six mémoires par mot (`lem/profil.py`)
+
+Un mot n'est pas « su » d'un bloc. Les jeux mesurent six mémoires distinctes :
+
+| Mémoire | Question | Mesurée par |
+|---|---|---|
+| reconnu | le reconnais-tu ? | carte de connaissance P(connu) : sonde, Bombe, Syllabaire, Étalonnage, Mot ou pas mot |
+| défini | sais-tu dire ce qu'il veut dire ? | FSRS « recep » (Cartes, jugé) |
+| retrouvé | le retrouves-tu à partir du sens ? | FSRS « prod » (Cartes) |
+| écrit juste | l'écris-tu sans faute ? | trace « ortho » (tous les jeux) |
+| trouvé vite | le sors-tu à partir de lettres, et vite ? | Bombe et Syllabaire (nombre de fois, temps médian) |
+| encodé | l'as-tu encodé ? | Mémoire verbale (reconnu quand il repasse), images mentales |
+
+Une seule valeur par mot ou six ? Elles sont corrélées sans se confondre : on sort *thuriféraire* à la
+Bombe sans savoir le définir, et l'inverse. Une seule valeur cacherait ce qui manque, et le moteur ne
+saurait plus quel exercice proposer. Six valeurs lisibles, donc, nourries par un seul journal, et qui
+partagent leurs preuves là où elles sont liées : un mot produit à la Bombe ou au Syllabaire est une
+preuve qu'il est connu (carte de connaissance). Pas de vecteur appris : les données d'une seule
+personne n'y suffisent pas, et l'on veut pouvoir expliquer chaque choix. Chaque mémoire vaut de 0 à 1,
+ou rien tant qu'aucun jeu ne l'a mesurée. L'Atlas montre la moyenne de chacune et les écarts qui disent
+quoi travailler (reconnus mais pas définis, définis mais pas retrouvés, lents à trouver, mal écrits,
+mal encodés) ; `lem mot <forme>` et `/mot` montrent la fiche d'un mot.
+
+Prochaine étape : un objectif unique pour le moteur, la somme pondérée de ces six mémoires, dont
+l'intention de la session (ou le jeu ouvert) fixe les poids.
+
+### 1.6 Unités : lemme, polysémie, expressions, concepts
 
 `entree` (mot, composé, expression, nom propre, mot étranger) → `sens` (polysémie) → `concept`
 (« les sages de la rue Montpensier » et « Conseil constitutionnel » pointent vers le même concept).
@@ -223,12 +249,40 @@ de la bombe à ta latence médiane.
 spontanément comptent comme preuves de vocabulaire actif dans la carte de connaissance, sans
 alourdir FSRS.
 
+### 5.2bis Syllabaire : les suites rares, par cœur
+
+L'entraînement de la Bombe (`lem/games/syllabaire.py`, `lem/suites.py`). Une suite « sub-50 » (jargon
+JKLM) est une suite de 2 ou 3 lettres que moins de 50 formes valides contiennent (règles de la Bombe :
+ni noms propres ni sigles ; une forme fléchie compte comme un mot, comme à JKLM). C'est là qu'on sèche
+en partie. L'index de toutes les suites se calcule en numpy, une fois, et se garde à côté de celui du
+lexique ; `lem suites` en donne la répartition.
+
+Un tour : la suite, et tous les mots que tu trouves avant la fin du temps (Entrée seule : fini). Puis la
+suite se déplie, par lemme : ce que tu viens de trouver, ce que tu avais trouvé un autre jour (ici ou à
+la Bombe), ce qui te manque, et l'**ancre**, le mot à sortir sans réfléchir quand la suite tombe. Deux
+mesures, parce que la Bombe en demande deux : la **survie** (un premier mot, vite) et l'**étendue**
+(la part de ses lemmes déjà produits). Chaque suite a sa répétition espacée (FSRS, trace « suite »,
+rejouée depuis le journal) : séchée 1, premier mot lent 2, à temps 3, réflexe avec au moins deux mots 4.
+Une suite ratée revient quatre suites plus loin dans la session.
+
 ### 5.3 Mémoire verbale
 
-Le vivier puise dans les régions les plus étranges du lexique, selon un score d'étrangeté : rareté,
+Deux modes.
+
+**Entraînement**, fidèle au benchmark : des mots courants, comme ceux du test. La difficulté n'est pas de
+retenir des mots inconnus, c'est de distinguer « vu tout à l'heure » de « familier depuis toujours ». La
+parade connue est d'encoder chaque mot nouveau en une image vive. Après « nouveau », une invite
+« image ? » attend que tu aies la tienne (Espace) et mesure le temps qu'elle t'a pris. Le vrai test n'a
+pas d'invite : elle s'efface quand ton record monte (toujours sous 50, les 30 premiers mots sous 100,
+les 10 premiers sous 200, plus rien ensuite). Le bilan sépare les deux erreurs, qui ne se corrigent pas
+de la même façon : fausse alerte (« vu » pour un mot nouveau : la familiarité t'a trompé) et oubli
+(« nouveau » pour un mot vu : l'encodage a manqué).
+
+**Élucubrations**, le jeu d'origine : le vivier puise dans les régions les plus étranges du lexique, selon un score d'étrangeté : rareté,
 mot étranger, nom propre, lettres rares, diacritiques non français, composés. Exemples :
 *kjökkenmödding*, *chlorfenvinphos*, *pouligny-saint-pierre*, *midshipmen*. On y mêle les mots
-« presque acquis » des autres jeux.
+« presque acquis » des autres jeux. La définition paraît après « nouveau » : le jeu t'apprend des mots,
+et ton image te revient après ta réponse quand le mot repasse.
 
 **Imagerie** : à la première apparition d'un mot, un champ s'ouvre pour ton image mentale. lem
 n'embarque pas de dictée : ta propre dictée Whisper (F8 sous Windows, Option droite sous macOS) écrit
@@ -328,7 +382,8 @@ Tout tourne en local sur le Mac. Le seul service extérieur est Claude, en fin d
 
 1. ✅ Socle : schéma, journal, FSRS rejouable, carte de connaissance, similarités, grappes, notation
    (directe, Claude, contrat Jev).
-2. ✅ Jeux : Cartes, Bombe, Mémoire verbale, Mot ou pas mot, Étalonnage, Atlas. TUI, CLI, tests.
+2. ✅ Jeux : Cartes, Bombe, Syllabaire, Mémoire verbale (entraînement, élucubrations), Mot ou pas mot,
+   Étalonnage, Atlas avec les six mémoires. TUI, CLI, tests.
 3. **Ingestion réelle sur ton Mac** (`lem telecharger --ingerer`), puis `lem index` et `lem calibrer`
    (seuils de proximité et de température mesurés sur la base réelle). Prompt prêt pour un Claude
    Code local : `docs/claude-local.md`.
@@ -336,6 +391,8 @@ Tout tourne en local sur le Mac. Le seul service extérieur est Claude, en fin d
 5. ✅ Moteur v2 : planificateur, sonde et vérification unique, carte rejouable, optimiseur FSRS par
    trace, juge Haiku en direct, banc d'essai. À valider sur ton journal réel après quelques semaines
    (`lem optimiser --essai`, Atlas).
-6. Intrus, DAT, Cemantix branché ; carte braille du lexique.
-7. Mots fléchés ; Morphalou ; dessin à la souris ; carte visuelle du lexique ; client Jev. Tous en
+6. Un objectif unique pour le moteur (somme pondérée des six mémoires, § 1.5) ; images mnémoniques en
+   ASCII, générées sur le PC et seulement affichées sur le Mac.
+7. Intrus, DAT, Cemantix branché ; carte braille du lexique.
+8. Mots fléchés ; Morphalou ; dessin à la souris ; carte visuelle du lexique ; client Jev. Tous en
    terminal, avec le même soin de design que le reste.

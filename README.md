@@ -26,10 +26,11 @@ ta mémoire.
 |---|---|---|
 | **Cartes** | mot → sens (texte libre ou synonymes), sens → mot (Tab = une lettre), duels de confusables ; chaque mot nouveau est d'abord **sondé** | précision, type d'erreur, mot réellement défini, lettres nécessaires |
 | **Bombe** | façon JKLM : une suite de lettres, un mot. Modes libre / apprentissage / confusables, répétition intelligente, extension vers la cible | vocabulaire actif spontané, disponibilité par suite, confusions |
-| **Mémoire verbale** | façon Human Benchmark, avec les mots les plus étranges du français, et capture d'images mentales | mémoire de reconnaissance, effet de l'imagerie (mode expérience) |
+| **Syllabaire** | l'entraînement de la Bombe : les suites rares (« sub-50 ») apprises par cœur, avec leur ancre et leur répétition espacée | survie (un premier mot, vite), étendue (combien de ses mots tu as) |
+| **Mémoire verbale** | façon Human Benchmark. *Entraînement* : fidèle au test, avec une invite « image ? » qui s'efface quand ton record monte. *Élucubrations* : les mots les plus étranges du français, avec leurs définitions | record, fausses alertes (familiarité) contre oublis (encodage), temps d'encodage |
 | **Mot ou pas mot** | décision lexicale chronométrée contre des pseudo-mots | temps d'accès lexical |
 | **Étalonnage** | test adaptatif oui/non, avec pseudo-mots et vérifications | place ta carte de connaissance |
-| **Atlas** | ta carte, ton profil, ta signature d'imprécision, tes confusions, ta métacognition | — |
+| **Atlas** | ta carte, tes six mémoires, tes entraînements, ton profil, ta signature d'imprécision, tes confusions, ta métacognition | — |
 
 **Graphie exigeante.** Aucune variante n'est acceptée ; seuls les accents *manquants* sont tolérés par
 défaut (« creolisation » vaut « créolisation », un accent faux reste une faute ; `/accents non` les exige,
@@ -61,7 +62,10 @@ de plus par heure que le précédent, et sa carte de ce que tu sais devient just
 avec GPU), sinon **Claude Haiku** en headless sur ton abonnement (Mac : rien de plus en mémoire à côté
 de bge-m3 et Whisper). `/juge haiku`, `/juge sonnet`, `/juge qwen3:8b`, `/juge non`.
 
-Dans tous les jeux : `/aide`, `/domaine science,droit`, `/etat flous`, `/vies 5`, `/mode confusables`, `/params`…
+**Six mémoires par mot.** Reconnu, défini, retrouvé, écrit juste, trouvé vite, encodé : chaque jeu en
+mesure une partie, et l'Atlas montre où ça manque (`lem mot thuriféraire`, ou `/mot` en jeu).
+
+Dans tous les jeux : `/aide`, `/mot acronyme`, `/domaine science,droit`, `/etat flous`, `/vies 5`, `/mode confusables`, `/params`…
 Les réglages sont enregistrés dans la base.
 
 ## Installation (macOS)
