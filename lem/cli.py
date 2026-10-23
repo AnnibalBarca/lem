@@ -217,7 +217,10 @@ def cmd_simuler(args) -> None:
 def cmd_rebuild(args) -> None:
     from lem.memory import scheduler
 
+    from lem.memory.migration import retablir_observations
+
     ctx = _ctx(args)
+    retablir_observations(ctx.con)          # base v1 : sans cela, le rejeu effacerait la carte
     n = scheduler.reconstruire(ctx.con)
     k = ctx.carte.rejouer()
     print(f"{n} traces FSRS reconstruites ; carte de connaissance rejouée ({k} observations).")

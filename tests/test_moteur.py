@@ -277,3 +277,28 @@ def test_prior_ancienne_methode_recalibre_une_fois(con):
     assert mettre_a_jour_prior(con)
     assert get_reglage(con, "prior")["version"] == VERSION_PRIOR and get_reglage(con, "prior")["seuil"] != 9.9
     assert not mettre_a_jour_prior(con)
+
+
+def test_migration_d_une_base_v1_ne_perd_pas_la_carte(con, carte):
+    """Base jouée avec v1 : journal présent, table observation vide, θ en base. La migration reconstitue
+    les observations ; le rejeu retrouve une carte (au lieu de l'effacer) ; une seconde fois ne fait rien."""
+    from lem.db import get_reglage
+    from lem.journal import Evenement, ecrire
+    from lem.memory.knowledge import CarteConnaissance
+    from lem.memory.migration import VERSION_MOTEUR, migrer
+
+    a, b, c = eid(con, "acronyme"), eid(con, "paronyme"), eid(con, "zeugma")
+    ecrire(con, None, Evenement("cartes", "reponse", entree_id=a, trace="recep", reponse="?", note_auto=1,
+                                data={"exercice": "recep"}))
+    ecrire(con, None, Evenement("etalonnage", "reponse", entree_id=b, trace="forme", reponse="non"))
+    ecrire(con, None, Evenement("bombe", "reponse", entree_id=c, trace="prod", reponse="zeugma",
+                                data={"cible_trouvee": True}))
+    con.execute("INSERT INTO theta(dimension, valeur, n_obs, maj) VALUES('global', 0.3, 5, 'x')")
+    con.commit()
+    assert migrer(con)
+    assert con.execute("SELECT COUNT(*) FROM observation").fetchone()[0] == 3
+    c2 = CarteConnaissance(con)
+    assert c2.n_obs(a) == 1 and c2.n_obs(b) == 1 and c2.n_obs(c) == 1
+    assert c2.theta.get("morph:-onyme", 0) < 0                  # acronyme raté et paronyme inconnu : -onyme baisse
+    assert get_reglage(con, "version_moteur") == VERSION_MOTEUR
+    assert not migrer(con)

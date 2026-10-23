@@ -103,12 +103,14 @@ après un vrai délai, puis l'espacement d'une session à l'autre.
   ce que tu as demandé et que la discrimination est un effet bien documenté.
 * **Le lexique synthétique est petit** (3 000 entrées). Le temps de démarrage a été mesuré à part sur
   200 000 entrées : 3,2 s sans l'index compact du lexique, environ 1,5 s avec (le cas de lem).
-* **Rien n'a été mesuré sur ta vraie base ni sur le Mac.** À faire demain :
-  * `lem rebuild` : les nouveaux statuts et la nouvelle table d'observations partent vides, l'ancien
-    journal reste valable ;
-  * le recalibrage de l'a priori se fait seul à l'ouverture ;
-  * quelques sessions de Cartes ;
-  * `lem optimiser --essai` dès qu'il y a 150 révisions espacées.
+* **Rien n'a été mesuré sur ta vraie base ni sur le Mac.** Une base jouée avec v1 est mise à niveau
+  **seule, à la première ouverture** (`lem/memory/migration.py`, testée) :
+  * les observations sont reconstituées depuis l'ancien journal (sinon le rejeu effacerait la carte) ;
+  * FSRS est rejoué avec les nouveaux statuts ;
+  * l'a priori est recalibré et la carte rejouée.
+
+  Les θ changent un peu : seule la première réponse sur chaque mot propage désormais. Ensuite :
+  quelques sessions de Cartes, puis `lem optimiser --essai` dès qu'il y a 150 révisions espacées.
 
 ## 6. Pour aller plus loin
 

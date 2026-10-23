@@ -54,7 +54,9 @@ class Contexte:
     @cached_property
     def carte(self) -> CarteConnaissance:
         from lem.memory.knowledge import mettre_a_jour_prior
+        from lem.memory.migration import migrer
 
+        migrer(self.con)                     # base jouée avec le moteur v1 : observations reconstituées, rejeux
         mettre_a_jour_prior(self.con)        # base calibrée par une méthode plus ancienne : recalibrée une fois
         return CarteConnaissance(self.con, self.lexique)
 
