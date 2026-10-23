@@ -431,6 +431,48 @@ def simuler(moteur_params: dict | None = None, *, jours: int = 30, minutes: floa
         con.close()
 
 
+def banc_productions(n_tapes: int = 300, *, propager: bool = True, graine: int = 0, n_mots: int = 3000,
+                     params_eleve: ParamsEleve | str | None = None) -> dict:
+    """La carte de connaissance face aux mots tapés librement (Bombe, Syllabaire) : un biais de sélection.
+
+    À la Bombe, on ne tape que des mots qu'on connaît : chaque observation est positive par construction. Si
+    elle propage aux θ (type, origine, bande de fréquence…), tout le lexique monte. On fait taper à l'élève
+    `n_tapes` mots qu'il sait produire (les plus courants plus souvent), puis on mesure la carte sur les mots
+    qu'il n'a PAS tapés : Brier contre la vérité, et Σ P(connu) contre le nombre de mots qu'il connaît."""
+    from lem.memory.knowledge import CarteConnaissance, ParamsPrior, calibrer
+
+    if isinstance(params_eleve, str):
+        params_eleve = PROFILS[params_eleve]
+    con = connect(":memory:")
+    ids = lexique_synthetique(con, n_mots, graine)
+    calibrer(con, ParamsPrior(cible_connus=0.35 * n_mots))
+    eleve = Eleve(con, ids, params_eleve, graine)
+    carte = CarteConnaissance(con)
+    rng = random.Random(graine + 7)
+    zipf = dict(con.execute("SELECT id, zipf FROM entree").fetchall())
+    productibles = [e for e in ids if eleve.R(e, "forme", 0.0) >= 0.9]
+    tapes: list[int] = []
+    pool = list(productibles)
+    while pool and len(tapes) < n_tapes:
+        e = rng.choices(pool, weights=[1 + (zipf.get(x) or 0) ** 2 for x in pool])[0]
+        pool.remove(e)
+        tapes.append(e)
+
+    def mesure() -> dict:
+        p = dict(zip(carte.ids.tolist(), carte.p_tous().tolist()))
+        reste = [e for e in ids if e not in set(tapes)]
+        verite = [eleve.R(e, "sens", 0.0) >= 0.9 for e in reste]
+        scores = [p.get(e, 0.5) for e in reste]
+        return {"brier": round(float(np.mean([(s - v) ** 2 for s, v in zip(scores, verite)])), 4),
+                "somme_p": round(sum(scores), 1), "connus_reels": sum(verite)}
+
+    avant = mesure()
+    for e in tapes:
+        carte.observer(e, 1.0, poids=0.5, persister=False, source="bombe:spontane", propager=propager)
+    apres = mesure()
+    return {"tapes": len(tapes), "propager": propager, "avant": avant, "apres": apres}
+
+
 def comparer(configs: dict[str, dict], graines=(0, 1, 2), **kw) -> dict[str, dict]:
     """Moyenne de plusieurs graines par configuration. Renvoie {nom: métriques moyennes}."""
     out = {}

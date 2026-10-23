@@ -302,3 +302,21 @@ def test_migration_d_une_base_v1_ne_perd_pas_la_carte(con, carte):
     assert c2.theta.get("morph:-onyme", 0) < 0                  # acronyme raté et paronyme inconnu : -onyme baisse
     assert get_reglage(con, "version_moteur") == VERSION_MOTEUR
     assert not migrer(con)
+
+
+def test_migration_v3_mots_tapes_ne_propagent_plus(con, carte):
+    """Base au moteur v2 : un mot spontané de la Bombe propageait aux θ. La migration v3 le restreint au mot."""
+    from lem.db import set_reglage
+    from lem.memory.knowledge import CarteConnaissance
+    from lem.memory.migration import migrer
+
+    for forme in ("acronyme", "paronyme", "homonyme", "synonyme"):
+        carte.observer(eid(con, forme), 1.0, poids=0.5, source="bombe:spontane")
+    gonfle = CarteConnaissance(con).theta.get("type:mot", 0)
+    assert gonfle > 0
+    set_reglage(con, "version_moteur", 2)
+    con.commit()
+    assert migrer(con)
+    assert con.execute("SELECT SUM(propager) FROM observation WHERE source = 'bombe:spontane'").fetchone()[0] == 0
+    apres = CarteConnaissance(con)
+    assert apres.theta.get("type:mot", 0) == 0 and apres.n_obs(eid(con, "acronyme")) == 1

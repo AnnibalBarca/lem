@@ -15,6 +15,7 @@ import sqlite3
 from dataclasses import dataclass, field
 
 from lem.db import domaines_descendants
+from lem.texte import normaliser
 
 ETATS = ("tous", "non_explores", "inconnus", "flous", "en_cours", "presque_acquis", "connus")
 
@@ -30,6 +31,7 @@ class Filtres:
     longueur_min: int | None = None
     longueur_max: int | None = None
     locutions: bool = False          # expressions et entrées de plusieurs mots : écartées sauf demande
+    secondaires: bool = False        # variantes graphiques et dérivés transparents (re-modeler) : écartés
     langue: str = "fr"
 
     def resume(self) -> str:
@@ -59,6 +61,37 @@ def _clause_etat(etat: str) -> str:
                               OR (c.p_connu >= 0.75 AND c.p_connu < 0.9 AND c.n_obs > 0))""",
         "connus": "COALESCE(c.p_connu, 0) >= 0.9",
     }[etat]
+
+
+# Entrées sans valeur d'apprentissage propre (constaté sur la vraie base : la moitié des sondes des Cartes) :
+#   * celles dont tous les sens renvoient à une autre graphie (« Orthographe parfois rencontrée pour… ») ;
+#   * les composés à trait d'union dont la forme soudée existe (re-modeler → remodeler) ;
+#   * les « re- / ré- » + verbe existant (re-recopier, re-ébranler) : « X de nouveau », transparents.
+DEFINITIONS_VARIANTES = ("Variante%", "Orthographe%", "Autre orthographe%", "Ancienne orthographe%",
+                         "Ancienne forme%", "Forme alternative%", "Graphie%")
+PREFIXES_ITERATIFS = ("re", "ré")
+_secondaires: dict[tuple, set[int]] = {}
+
+
+def secondaires(con: sqlite3.Connection) -> set[int]:
+    """Les entrées écartées par défaut de la sélection des jeux (variantes, dérivés transparents)."""
+    cle = (id(con), *con.execute("SELECT COUNT(*), MAX(id) FROM entree").fetchone(),
+           con.execute("SELECT COUNT(*) FROM sens").fetchone()[0])
+    if cle in _secondaires:
+        return _secondaires[cle]
+    motifs = " OR ".join("s.definition LIKE ?" for _ in DEFINITIONS_VARIANTES)
+    ids = {r[0] for r in con.execute(
+        f"""SELECT s.entree_id FROM sens s GROUP BY s.entree_id
+            HAVING SUM(CASE WHEN {motifs} THEN 1 ELSE 0 END) = COUNT(*)""", DEFINITIONS_VARIANTES)}
+    normes = {normaliser(r[0]) for r in con.execute("SELECT forme FROM entree WHERE instr(forme, '-') = 0")}
+    for eid, forme in con.execute("SELECT id, forme FROM entree WHERE instr(forme, '-') > 0 AND instr(forme, ' ') = 0"):
+        tete, _, reste = forme.partition("-")
+        n = normaliser(forme)
+        if n.replace("-", "") in normes or (tete.lower() in PREFIXES_ITERATIFS and normaliser(reste) in normes):
+            ids.add(eid)
+    _secondaires.clear()
+    _secondaires[cle] = ids
+    return ids
 
 
 def selectionner(con: sqlite3.Connection, f: Filtres, limite: int | None = None,
@@ -98,7 +131,11 @@ def selectionner(con: sqlite3.Connection, f: Filtres, limite: int | None = None,
               WHERE {' AND '.join(where)} ORDER BY {ordre}"""
     if limite:
         sql += f" LIMIT {int(limite)}"
-    return con.execute(sql, args).fetchall()
+    rows = con.execute(sql, args).fetchall()
+    if f.secondaires:
+        return rows
+    exclus = secondaires(con)
+    return [r for r in rows if r["id"] not in exclus]
 
 
 def domaines_disponibles(con: sqlite3.Connection) -> list[tuple[str, int]]:

@@ -41,6 +41,7 @@ SONDES_PAR_MOT = 4       # au plus 4 sondes par mot de budget (si tout est connu
 SECONDES_PAR_CARTE = 10.0  # pour traduire la durée visée en nombre de cartes
 COUT_MOT = 6.0           # cartes qu'un mot appris coûte sa première semaine (sonde, retours, duel, sens → mot)
 EXPLORATION = 3.0        # poids de l'information qu'apporte une sonde dans le choix des mots nouveaux
+ECARTS_REPLI = (ECART_SOEURS, 2)  # écarts tentés, dans l'ordre, pour une carte qui passe en avance
 
 
 @dataclass
@@ -111,9 +112,14 @@ class Planificateur:
             self._rev_depuis_nouveau += 1
             return self._prendre(rev, self.revisions)
 
-        # 3. Plus que des cartes en attente pas encore mûres : la plus proche passe en avance.
+        # 3. Plus que des cartes en attente pas encore mûres : la plus proche passe en avance, à ECART_SOEURS de
+        #    sa sœur si possible, à 2 sinon. (Ouvrir plutôt un mot nouveau, au-delà d'EN_COURS_MAX, pour tenir
+        #    les délais : essayé au banc, aucun gain et plus de temps sur des mots connus.)
         if self.attente:
-            libres = [x for x in self.attente if x.role == "reprise" or self._libre(x.entree_id, 2)]
+            for ecart in ECARTS_REPLI:
+                libres = [x for x in self.attente if x.role == "reprise" or self._libre(x.entree_id, ecart)]
+                if libres:
+                    break
             x = min(libres or self.attente, key=lambda x: (x.pret_a, x.apres))
             return self._prendre(x, self.attente)
         if self.nouveaux_possibles():

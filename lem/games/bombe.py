@@ -84,6 +84,7 @@ PREFIXES_SOUDES = tuple(sorted((
     "poly", "post", "pre", "proto", "pseudo", "psycho", "radio", "retro", "semi", "socio", "supra", "tele",
     "thermo", "turbo", "ultra", "video"), key=len, reverse=True))
 SEP = "\x00"
+LETTRES = re.compile(r"[a-z]+")         # une suite : des lettres a–z seulement (isalpha() accepte Ɲ, ², ß…)
 
 
 def trouvailles(con: sqlite3.Connection, entree_id: int) -> dict:
@@ -199,7 +200,7 @@ class PartieBombe:
         self._pos_vivier = self.carte.positions(self._ids_vivier)
         self._n_cache: dict[str, int] = {}
         self._cibles = [r for r in self.vivier.values() if len(r["forme"]) >= self.params["long_min"] + 1
-                        and r["forme"].replace("-", "").isalpha()]
+                        and LETTRES.fullmatch(normaliser(r["forme"]).replace("-", ""))]
         # Mots étudiés dans les Cartes, du plus tôt dû au plus tard : la Bombe sert aussi à les rappeler.
         cibles = {r["id"] for r in self._cibles}
         self._etudies = [r[0] for r in self.con.execute(
@@ -249,7 +250,7 @@ class PartieBombe:
                 continue
             i = self.rng.randint(0, len(f) - L)
             s = f[i : i + L]
-            if not s.isalpha():
+            if not LETTRES.fullmatch(s):
                 continue
             n, k = self.solutions(s)
             if n >= self.params["solutions_min"]:
@@ -275,7 +276,7 @@ class PartieBombe:
     def _suite_distinctive(self, forme: str, communs: list[str] | None = None, longueur: int | None = None) -> str:
         f = normaliser(forme)
         L = min(longueur or self._longueur(), len(f) - 1)
-        subs = {f[i : i + L] for i in range(len(f) - L + 1) if f[i : i + L].isalpha()}
+        subs = {f[i : i + L] for i in range(len(f) - L + 1) if LETTRES.fullmatch(f[i : i + L])}
         if communs:
             partages = [s for s in subs if sum(s in normaliser(c) for c in communs) >= 1]
             if partages:
@@ -432,7 +433,8 @@ class PartieBombe:
             ev = ecrire(self.con, self.session_id, Evenement("bombe", "reponse", entree_id=eid, trace="prod",
                                                              reponse=texte, correct=True, latence_ms=latence_ms,
                                                              frappe=frappe or Frappe(), data=data))
-            self.carte.observer(eid, 1.0, poids=0.5, source="bombe:spontane", evenement_id=ev)
+            # Sans propagation : on ne tape que des mots qu'on connaît (biais de sélection, cf. memory/migration.py).
+            self.carte.observer(eid, 1.0, poids=0.5, source="bombe:spontane", evenement_id=ev, propager=False)
             retour.revelation = self._apres_echec_cible(texte)
         retour.trouvaille = trouvailles(self.con, eid)
         self.score += retour.points

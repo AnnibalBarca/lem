@@ -225,11 +225,11 @@ def cmd_suites(args) -> None:
     print("suites de 2 et 3 lettres, par nombre de mots valides (ni noms propres ni sigles) :")
     for tranche, n in ix.repartition().items():
         print(f"  {tranche:>8} mots : {n:>6} suites")
-    rares = ix.rares(args.seuil, minimum=args.minimum)
+    rares = ix.rares(args.seuil, minimum=args.minimum, attestes=args.attestes)
     etats = etats_suites(ctx.con)
     vues = [s for s, _ in rares if s in etats]
     sures = [s for s in vues if (etats[s].card.stability or 0) >= 21]
-    print(f"sub-{args.seuil} (au moins {args.minimum} mots) : {len(rares)} suites · {len(vues)} travaillées "
+    print(f"sub-{args.seuil} (au moins {args.minimum} mots, dont {args.attestes} en usage) : {len(rares)} suites · {len(vues)} travaillées "
           f"· {len(sures)} sûres (stabilité ≥ 21 j)")
     print("  " + "  ".join(f"{s.upper()}:{n}" for s, n in rares[: args.exemples]))
 
@@ -356,6 +356,7 @@ def main(argv: list[str] | None = None) -> None:
     su = sp.add_parser("suites", help="les suites rares de la Bombe (sub-N) et tes progrès au Syllabaire")
     su.add_argument("--seuil", type=int, default=50)
     su.add_argument("--minimum", type=int, default=3)
+    su.add_argument("--attestes", type=int, default=2, help="dont au moins N mots en usage (wordfreq)")
     su.add_argument("--exemples", type=int, default=30)
     su.set_defaults(f=cmd_suites)
 

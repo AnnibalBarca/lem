@@ -46,6 +46,8 @@ SYLLABAIRE = enregistrer(Jeu(
         Param("seuil", "Moins de N mots (sub-N)", int, 50, "une suite est rare si moins de N formes la contiennent",
               2, 100_000, alias=("sub",)),
         Param("minimum", "Au moins N mots", int, 3, "écarte les suites à un ou deux mots", 1, 1000),
+        Param("attestes", "Dont N en usage", int, 2, "mots courants ou rares mais attestés (wordfreq) ; écarte les "
+              "suites qui ne tiennent qu'à des sigles, des gentilés ou des graphies inclusives", 0, 1000),
         Param("long_min", "Lettres min", int, 2, "", 2, 3),
         Param("long_max", "Lettres max", int, 3, "", 2, 3),
         Param("nouvelles", "Suites nouvelles par session", int, 8, "", 0, 200),
@@ -180,14 +182,15 @@ class PartieSyllabaire:
 
     def _eligible(self, suite: str) -> bool:
         n = self.index.n(suite)
-        return len(suite) in self._longueurs() and self.params["minimum"] <= n < self.params["seuil"]
+        return (len(suite) in self._longueurs() and self.params["minimum"] <= n < self.params["seuil"]
+                and self.index.n_attestes(suite) >= self.params.get("attestes", 0))
 
     def _construire_file(self) -> None:
         t = now()
         dues = [e for e in self.etats.values() if e.card.due <= t and self._eligible(e.suite)]
         dues.sort(key=lambda e: e.card.due)
-        rares = [s for s, _ in self.index.rares(self.params["seuil"], self._longueurs(), self.params["minimum"])
-                 if s not in self.etats]
+        rares = [s for s, _ in self.index.rares(self.params["seuil"], self._longueurs(), self.params["minimum"],
+                                                 self.params.get("attestes", 0)) if s not in self.etats]
         if self.params["ordre"] == "rares":
             rares.reverse()
         elif self.params["ordre"] == "hasard":
@@ -262,7 +265,8 @@ class PartieSyllabaire:
         ev = ecrire(self.con, self.session_id, Evenement(
             "syllabaire", "reponse", entree_id=eid, trace="prod", reponse=cle, correct=True, latence_ms=latence_ms,
             frappe=frappe or Frappe(), data={"suite": t.suite, "n": t.n, "rang": len(t.donnes), "fsrs": False}))
-        self.carte.observer(eid, 1.0, poids=0.5, source="syllabaire", evenement_id=ev)
+        # Sans propagation : un mot tapé librement est connu par construction (cf. memory/migration.py).
+        self.carte.observer(eid, 1.0, poids=0.5, source="syllabaire", evenement_id=ev, propager=False)
         return Reponse(True, "", cle, eid, inedit)
 
     def terminer(self, duree_ms: int | None = None) -> Bilan:
@@ -339,12 +343,13 @@ class PartieSyllabaire:
                 "hesitantes": sum(1 for n in notes if n == 2), "sures": sum(1 for n in notes if n >= 3)}
 
 
-def resume(con: sqlite3.Connection, lexique, seuil: int = 50, quand: datetime | None = None) -> dict:
+def resume(con: sqlite3.Connection, lexique, seuil: int = 50, quand: datetime | None = None,
+           attestes: int = 2) -> dict:
     """Pour l'Atlas : suites rares travaillées, sûres, dues, et combien il en reste à découvrir."""
     etats = etats_suites(con)
     quand = quand or now()
     index = IndexSuites(lexique)
-    rares = index.rares(seuil, minimum=3)
+    rares = index.rares(seuil, minimum=3, attestes=attestes)
     eligibles = {s for s, _ in rares}
     vues = [e for e in etats.values() if e.suite in eligibles]
     sures = [e for e in vues if e.card.stability and e.card.stability >= 21]

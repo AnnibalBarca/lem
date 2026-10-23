@@ -360,3 +360,30 @@ def test_memoire_elucubrations_sans_locutions(con, rng):
     p2 = PartieMemoire(con, {**REGISTRE["memoire"].defauts(), "mode": "elucubrations", "etrangete": 0.0,
                              "locutions": True}, rng=rng)
     assert any(" " in r["forme"] for r in p2.etranges)
+
+
+def test_selection_ecarte_variantes_et_derives_transparents(con):
+    from lem.games.pool import Filtres, secondaires, selectionner
+
+    def entree(forme, definition):
+        e = con.execute("INSERT INTO entree(forme, pos) VALUES(?, 'verbe')", (forme,)).lastrowid
+        con.execute("INSERT INTO sens(entree_id, definition) VALUES(?, ?)", (e, definition))
+        return e
+
+    entree("remodeler", "Modeler de nouveau.")
+    v = entree("re-modeler", "Orthographe parfois rencontrée pour remodeler.")
+    entree("recopier", "Copier de nouveau.")
+    r = entree("re-recopier", "Recopier de nouveau.")
+    a = entree("anti-inflammatoire", "Qui combat l'inflammation.")
+    exclus = secondaires(con)
+    assert {v, r} <= exclus and a not in exclus
+    ids = {x["id"] for x in selectionner(con, Filtres())}
+    assert v not in ids and r not in ids and a in ids
+    assert v in {x["id"] for x in selectionner(con, Filtres(secondaires=True))}
+
+
+def test_elucubrations_plafonnent_les_noms_propres(con, rng):
+    m = PartieMemoire(con, params("memoire", mode="elucubrations", noms_propres=0.0), rng=rng)
+    tires = [m.suivant() for _ in range(40)]
+    propres = {r["id"] for r in m.propres}
+    assert not any(t.entree_id in propres for t in tires if t.premiere_fois)

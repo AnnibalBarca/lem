@@ -11,6 +11,12 @@ les règles qu'appliquaient les jeux :
   Mot ou pas    oui y = 0,7 ; non y = 0,1 (poids 0,4)
 
 Puis FSRS est rejoué en entier (nouveaux statuts, pas d'étapes dans la session), et la carte aussi.
+
+v3 : un mot tapé librement (mot spontané de la Bombe, mot du Syllabaire) ne propage plus aux θ. On ne tape
+que des mots qu'on connaît : ces observations sont positives par construction (biais de sélection), et
+propagées elles gonflaient tout le lexique (sur la vraie base, 68 mots tapés ajoutaient 41 000 mots
+« connus » ; au banc, `simulation.banc_productions`, le Brier passe de 0,12 à 0,18–0,30). Elles ne
+corrigent plus que le mot lui-même. La carte est rejouée.
 """
 
 from __future__ import annotations
@@ -20,7 +26,8 @@ import sqlite3
 
 from lem.db import get_reglage, set_reglage
 
-VERSION_MOTEUR = 2
+VERSION_MOTEUR = 3
+SOURCES_SANS_PROPAGATION = ("bombe:spontane", "migration:bombe:spontane", "syllabaire")
 
 
 def retablir_observations(con: sqlite3.Connection) -> int:
@@ -40,7 +47,7 @@ def retablir_observations(con: sqlite3.Connection) -> int:
         elif jeu == "bombe" and r["type"] == "reponse" and data.get("cible_trouvee"):
             obs = (1.0, 1.0, "migration:bombe:cible", False, True)
         elif jeu == "bombe" and r["type"] == "reponse" and data.get("spontane"):
-            obs = (1.0, 0.5, "migration:bombe:spontane", False, True)
+            obs = (1.0, 0.5, "migration:bombe:spontane", False, False)
         elif jeu == "bombe" and r["type"] == "revelation":
             obs = (0.4, 0.3, "migration:bombe:revelation", False, True)
         elif jeu == "etalonnage" and r["type"] == "reponse" and r["trace"] == "forme":
@@ -62,8 +69,9 @@ def retablir_observations(con: sqlite3.Connection) -> int:
 
 
 def migrer(con: sqlite3.Connection) -> bool:
-    """Met une base v1 au niveau du moteur v2 (idempotent). Renvoie True si quelque chose a été fait."""
-    if (get_reglage(con, "version_moteur", 0) or 0) >= VERSION_MOTEUR:
+    """Met une base au niveau du moteur courant (idempotent). Renvoie True si quelque chose a été fait."""
+    version = get_reglage(con, "version_moteur", 0) or 0
+    if version >= VERSION_MOTEUR:
         return False
     if not con.execute("SELECT 1 FROM entree LIMIT 1").fetchone():
         set_reglage(con, "version_moteur", VERSION_MOTEUR)
@@ -72,8 +80,11 @@ def migrer(con: sqlite3.Connection) -> bool:
     from lem.memory import scheduler
     from lem.memory.knowledge import CarteConnaissance, mettre_a_jour_prior
 
-    retablir_observations(con)
-    scheduler.reconstruire(con)
+    if version < 2:
+        retablir_observations(con)
+        scheduler.reconstruire(con)
+    con.execute(f"""UPDATE observation SET propager = 0
+                    WHERE source IN ({', '.join('?' * len(SOURCES_SANS_PROPAGATION))})""", SOURCES_SANS_PROPAGATION)
     if not mettre_a_jour_prior(con):            # recalibre et rejoue si besoin ; sinon on rejoue ici
         CarteConnaissance(con).rejouer()
     set_reglage(con, "version_moteur", VERSION_MOTEUR)

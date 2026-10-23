@@ -103,6 +103,9 @@ Toutes les expériences portent sur les profils moyen et faible (et fort quand c
 | Rétention visée 0,85 / 0,90 / 0,95 | 0,85 : plus de mots vus, moins de mots retrouvés ; 0,95 : l'inverse | 0,90 |
 | Sens → mot à 6 cartes et 2 min, ou à 10 cartes et 5 min | 10 et 5 min légèrement meilleur | 10 cartes, 5 min |
 | Duels de rappel sur tes confusions réelles (un mot tapé pour l'autre), 4 par session | Aucun gain, dans le bruit (−1 % à −5 %) | Non retenu : le duel à la découverte suffit dans ce modèle |
+| Sœurs à 2 cartes quand une carte en attente passe en avance (vu sur la vraie base, rapport PC) : écart 4 d'abord, 2 seulement à défaut | moyen : sens 19,4 → 19,5, mot 13,9 → 13,6 (bruit) ; faible : 13,1 → 13,7 et 8,2 → 9,0 ; Brier 0,08 inchangé | Adopté : la règle des 4 cartes est tenue sans rien coûter |
+| Ouvrir un mot nouveau (au-delà de 5 ouverts) plutôt que d'avancer une carte en attente, pour tenir les 5 min de sens → mot | moyen : 19,1 et 13,5 ; faible : 13,7 et 8,4 ; plus de minutes sur des mots connus (moyen 27,5 contre 19,8) | Non retenu |
+| Mots tapés librement (Bombe, Syllabaire) propagés aux θ (`banc_productions`, 70 et 300 mots, 3 graines) | Brier hors mots tapés 0,12 → 0,18–0,20 (70) et 0,29–0,30 (300) ; Σ P +35 à +80 % ; sans propagation, carte intacte. Sur la vraie base : 68 mots → +41 000 « connus » | **Ne propagent plus** (biais de sélection : on ne tape que ce qu'on connaît) ; migration v3 |
 
 **Une hypothèse réfutée** : j'avais classé « une carte ratée ne revient pas dans la session » comme le
 défaut n° 1 de v1. Le banc dit l'inverse pour ce modèle de mémoire : le réapprentissage immédiat est

@@ -44,9 +44,13 @@ logit P(connu | mot) = logit P_prior(mot) + Σ θ_d (d ∈ dimensions(mot)) + r�
   même famille morphologique) + exploration × p(1 − p) × utilité (ce qu'une sonde apprendrait sur toi).
 * **Rejouable.** Chaque mise à jour est écrite dans la table `observation` ; `CarteConnaissance.rejouer`
   reconstruit tout, en prenant pour chaque observation issue d'une note la meilleure note disponible.
-  Seules les observations qui disent ce que tu savais **sans étude** (sonde, vérification, Étalonnage,
-  Bombe, Mot ou pas mot) corrigent les θ ; la révision d'un mot qu'on étudie ne corrige que ce mot
-  (sinon chaque révision réussie ferait croire que tout le lexique est connu).
+  Seules les observations qui disent ce que tu savais **sans étude**, sur un mot que le moteur a choisi
+  (sonde, vérification, Étalonnage, cible de la Bombe, Mot ou pas mot), corrigent les θ. La révision d'un
+  mot qu'on étudie ne corrige que ce mot, sinon chaque révision réussie ferait croire que tout le lexique
+  est connu. Un mot tapé librement (Bombe, Syllabaire) non plus : on ne tape que des mots qu'on connaît,
+  l'observation est positive par construction. Propagée, elle gonflait la carte : sur la vraie base,
+  68 mots tapés à la Bombe ajoutaient 41 000 mots « connus » ; au banc (`simulation.banc_productions`),
+  le Brier passe de 0,12 à 0,18–0,30.
 * **Calibrage** : la cible compte des lemmes — une graphie une fois, sans sigles ni composés de
   fréquence inconnue.
 
@@ -255,7 +259,9 @@ L'entraînement de la Bombe (`lem/games/syllabaire.py`, `lem/suites.py`). Une su
 JKLM) est une suite de 2 ou 3 lettres que moins de 50 formes valides contiennent (règles de la Bombe :
 ni noms propres ni sigles ; une forme fléchie compte comme un mot, comme à JKLM). C'est là qu'on sèche
 en partie. L'index de toutes les suites se calcule en numpy, une fois, et se garde à côté de celui du
-lexique ; `lem suites` en donne la répartition.
+lexique ; `lem suites` en donne la répartition. Sur la vraie base, la plupart des suites rares ne
+tiennent qu'à des formes sans usage (sigles rangés comme mots, gentilés, graphies inclusives) : une suite
+n'est retenue que si au moins deux de ses mots sont attestés (liste française de wordfreq).
 
 Un tour : la suite, et tous les mots que tu trouves avant la fin du temps (Entrée seule : fini). Puis la
 suite se déplie, par lemme : ce que tu viens de trouver, ce que tu avais trouvé un autre jour (ici ou à

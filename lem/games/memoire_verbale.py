@@ -55,6 +55,8 @@ MEMOIRE = enregistrer(Jeu(
         Param("imagerie", "Imagerie mentale écrite", str, "off", "élucubrations : off | toujours | experience",
               choix=("off", "toujours", "experience")),
         Param("definitions", "Définitions", bool, True, "élucubrations : la définition après « nouveau »"),
+        Param("noms_propres", "Part de noms propres", float, 0.15, "élucubrations : 0 à 1 (sans plafond, plus de "
+              "la moitié du vivier serait des toponymes)", 0, 1),
     ],
 ))
 
@@ -133,6 +135,7 @@ class PartieMemoire:
         self.historique = scores(con, self.mode)
         self.record = max(self.historique, default=0)
         self.max_guides = guides_par_partie(self.record, params.get("encodage", "estompe"))
+        self.propres: list = []        # élucubrations : noms propres, tirés à part (plafond `noms_propres`)
         self._construire_vivier()
 
     @property
@@ -165,12 +168,14 @@ class PartieMemoire:
             # niveau d'étrangeté : on garde la tranche supérieure correspondante (au moins 200 mots).
             n = max(200, int(len(notes) * (1.05 - self.params["etrangete"])))
             self.etranges = [r for _, r in notes[:n]]
+            self.propres = [r for r in self.etranges if r["type"] == "nom_propre"]
+            self.etranges = [r for r in self.etranges if r["type"] != "nom_propre"] or self.propres
             self.presque = self.con.execute(
                 """SELECT e.id, e.forme FROM entree e WHERE EXISTS (SELECT 1 FROM trace_etat t WHERE t.entree_id = e.id
                        AND t.stabilite BETWEEN 1 AND 30)
                    OR e.id IN (SELECT entree_id FROM connaissance WHERE p_connu BETWEEN 0.6 AND 0.9 AND n_obs > 0)"""
             ).fetchall()
-        for r in [*self.etranges, *self.presque]:
+        for r in [*self.etranges, *self.propres, *self.presque]:
             self.formes[r["id"]] = r["forme"]
 
     def _imager(self, entree_id: int) -> bool:
@@ -187,12 +192,16 @@ class PartieMemoire:
         p_vu = min(0.55, len(self.vus) / (len(self.vus) + 6)) if self.vus else 0.0
         candidats_vus = [v for v in self.vus if v != self.dernier]
         vus = set(self.vus)
-        reste_nouveaux = any(r["id"] not in vus for r in self.etranges)
+        reste_nouveaux = any(r["id"] not in vus for r in [*self.etranges, *self.propres])
         if candidats_vus and (self.rng.random() < p_vu or not reste_nouveaux):
             eid = self.rng.choice(candidats_vus)
             self.tour = Tour(eid, self.formes[eid], True, False, False)
         else:
-            source = self.presque if self.presque and self.rng.random() < self.params["presque_acquis"] else self.etranges
+            source = self.etranges
+            if self.presque and self.rng.random() < self.params["presque_acquis"]:
+                source = self.presque
+            elif self.propres and self.rng.random() < self.params.get("noms_propres", 0.15):
+                source = self.propres
             libres = [r for r in source if r["id"] not in vus] or [r for r in self.etranges if r["id"] not in vus]
             r = self.rng.choice(libres)
             guider = self.mode == "entrainement" and self.guides < self.max_guides
