@@ -29,6 +29,12 @@ def pas_de_vrai_claude(monkeypatch):
     monkeypatch.setenv("LEM_CLAUDE_CMD", "lem-claude-absent-pendant-les-tests")
 
 
+@pytest.fixture(autouse=True)
+def pas_de_vraie_dictee(monkeypatch):
+    """Tests never talk to the user's real voxmac (it would start typing into whatever window has the focus)."""
+    monkeypatch.setenv("LEM_DICTEE", "0")
+
+
 @pytest.fixture
 def con():
     c = connect(":memory:")
