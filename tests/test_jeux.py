@@ -17,7 +17,7 @@ def params(jeu, **kw):
 
 
 def test_registre_complet():
-    assert {"cartes", "bombe", "memoire", "etalonnage", "mot_ou_pas"} <= set(REGISTRE)
+    assert {"cartes", "bombe", "memoire", "etalonnage"} <= set(REGISTRE)
 
 
 def test_commandes_en_partie():
@@ -538,3 +538,12 @@ def test_masculin_par_defaut_dans_les_cartes(con):
     sec = secondaires(con)
     assert f in sec and m not in sec
     assert con.execute("SELECT COUNT(*) FROM forme WHERE forme = 'raëlienne'").fetchone()[0] == 2     # still a valid form
+
+
+def test_purger_mot_ou_pas(con):
+    from lem.cli import purger_mot_ou_pas
+
+    con.execute("INSERT INTO evenement(ts, jeu, type) VALUES('2026-01-01T00:00:00.000Z', 'mot_ou_pas', 'reponse')")
+    con.execute("INSERT INTO evenement(ts, jeu, type) VALUES('2026-01-01T00:00:00.000Z', 'cartes', 'reponse')")
+    assert purger_mot_ou_pas(con) == 1
+    assert [r[0] for r in con.execute("SELECT jeu FROM evenement")] == ["cartes"]

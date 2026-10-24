@@ -1,11 +1,9 @@
-"""Deux jeux de décision lexicale, un seul moteur.
+"""Étalonnage : « Connais-tu ce mot ? » oui / non. Mots choisis là où l'information est
+maximale (P ≈ 0,5, dimensions variées), avec ~15 % de pseudo-mots pour mesurer
+la surestimation. Un « oui » sur quatre demande une définition (vérifiée plus tard
+par Claude). C'est ce qui place ta carte de connaissance au départ.
 
-Étalonnage  : « Connais-tu ce mot ? » oui / non. Mots choisis là où l'information est
-              maximale (P ≈ 0,5, dimensions variées), avec ~15 % de pseudo-mots pour mesurer
-              la surestimation. Un « oui » sur quatre demande une définition (vérifiée plus tard
-              par Claude). C'est ce qui place ta carte de connaissance au départ.
-Mot ou pas  : décision lexicale rapide : mot réel ou pseudo-mot ? Temps de réponse mesuré,
-              erreurs = vies. Les mots réels sont tirés de tes zones floues.
+(Le jeu « Mot ou pas mot » a été retiré : seul l'étalonnage reste.)
 """
 
 from __future__ import annotations
@@ -29,18 +27,6 @@ ETALONNAGE = enregistrer(Jeu(
         Param("questions", "Questions", int, 120, "", 10, 1000),
         Param("pseudo", "Part de pseudo-mots", float, 0.15, "", 0, 0.5),
         Param("verification", "Part de « oui » à définir", float, 0.25, "", 0, 1),
-        *PARAMS_FILTRES,
-    ],
-))
-
-MOT_OU_PAS = enregistrer(Jeu(
-    id="mot_ou_pas",
-    nom="Mot ou pas mot",
-    accroche="Ce mot existe-t-il ? Vite.",
-    description="Décision lexicale chronométrée sur tes zones floues.",
-    params=[
-        Param("vies", "Vies", int, 3, "", 1, 10),
-        Param("pseudo", "Part de pseudo-mots", float, 0.5, "", 0.1, 0.9),
         *PARAMS_FILTRES,
     ],
 ))
@@ -70,24 +56,20 @@ class PartieDecision:
         self.n = 0
         self.fausses_alertes = 0
         self.pseudos_vus = 0
-        self.vies = params.get("vies", 10**9)
-        self.score = 0
+        self.vies = 10**9
         self.question: Question | None = None
 
     @property
     def finie(self) -> bool:
-        return self.vies <= 0 or (self.jeu == "etalonnage" and self.n >= self.params["questions"])
+        return self.n >= self.params["questions"]
 
     def _mot_informatif(self) -> sqlite3.Row | None:
         libres = [r for r in self.vivier if r["id"] not in self.poses]
         if not libres:
             return None
         ech = self.rng.sample(libres, min(300, len(libres)))
-        if self.jeu == "etalonnage":
-            # Information de Fisher d'un item de Rasch : p(1 − p). Petite part d'aléa pour varier les dimensions.
-            ech.sort(key=lambda r: -(self.carte.p(r["id"]) * (1 - self.carte.p(r["id"])) + 0.05 * self.rng.random()))
-        else:
-            ech.sort(key=lambda r: abs(self.carte.p(r["id"]) - 0.5) + 0.2 * self.rng.random())
+        # Information de Fisher d'un item de Rasch : p(1 − p). Petite part d'aléa pour varier les dimensions.
+        ech.sort(key=lambda r: -(self.carte.p(r["id"]) * (1 - self.carte.p(r["id"])) + 0.05 * self.rng.random()))
         return ech[0]
 
     def suivante(self) -> Question:
@@ -102,7 +84,7 @@ class PartieDecision:
             self.question = Question(self.gen.generer() or "xyzzy", None)
             return self.question
         self.poses.add(r["id"])
-        verifier = self.jeu == "etalonnage" and self.rng.random() < self.params.get("verification", 0)
+        verifier = self.rng.random() < self.params.get("verification", 0)
         self.question = Question(r["forme"], r["id"], verifier)
         return self.question
 
@@ -113,9 +95,6 @@ class PartieDecision:
             self.pseudos_vus += 1
             self.fausses_alertes += int(oui)
         correct = oui == reel
-        if self.jeu == "mot_ou_pas":
-            self.score += int(correct)
-            self.vies -= int(not correct)
         ev = ecrire(self.con, self.session_id, Evenement(
             self.jeu, "reponse", entree_id=q.entree_id, trace="forme", reponse="oui" if oui else "non",
             correct=correct, latence_ms=latence_ms,
@@ -123,11 +102,8 @@ class PartieDecision:
         if reel:
             # Un « oui » vaut moins si tu as tendance à dire oui aux pseudo-mots.
             taux_fa = self.fausses_alertes / self.pseudos_vus if self.pseudos_vus else 0.0
-            if self.jeu == "etalonnage":
-                self.carte.observer(q.entree_id, 0.9 if oui else 0.05, poids=1.0 - 0.8 * taux_fa if oui else 1.0,
-                                    source="etalonnage", evenement_id=ev)
-            else:
-                self.carte.observer(q.entree_id, 0.7 if oui else 0.1, poids=0.4, source="mot_ou_pas", evenement_id=ev)
+            self.carte.observer(q.entree_id, 0.9 if oui else 0.05, poids=1.0 - 0.8 * taux_fa if oui else 1.0,
+                                source="etalonnage", evenement_id=ev)
         return correct
 
     def verification(self, definition: str, latence_ms: int) -> int:

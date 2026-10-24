@@ -96,7 +96,6 @@ MENU = [
     ("bombe", "Bombe", "des lettres, un mot, avant l'explosion"),
     ("syllabaire", "Syllabaire", "les suites rares de la Bombe, par cœur"),
     ("memoire", "Mémoire verbale", "vu ou nouveau ? entraînement au test, ou mots étranges"),
-    ("mot_ou_pas", "Mot ou pas mot", "décision lexicale chronométrée"),
     ("etalonnage", "Étalonnage", "placer ta carte de connaissance"),
     ("atlas", "Atlas", "ta carte, tes confusions, ta signature"),
     ("noter", "Noter avec Claude", "notation différée des définitions"),
@@ -115,12 +114,12 @@ def mots_recents(con, n: int = 12) -> list[str]:
     return list(dict.fromkeys(m for m in mots if len(m) >= 4))[:n]
 
 
-JEUX_RAPIDES = ["cartes", "bombe", "syllabaire", "memoire", "mot_ou_pas", "etalonnage"]
+JEUX_RAPIDES = ["cartes", "bombe", "syllabaire", "memoire", "etalonnage"]
 
 
 def ecran_de(jeu_id: str):
     return {"cartes": EcranCartes, "bombe": EcranBombe, "syllabaire": EcranSyllabaire, "memoire": EcranMemoire,
-            "mot_ou_pas": EcranDecision, "etalonnage": EcranDecision}[jeu_id]
+            "etalonnage": EcranDecision}[jeu_id]
 
 
 class Accueil(Screen):
@@ -1262,7 +1261,7 @@ class EcranMemoire(EcranPartie):
         self._repondre(False)
 
 
-# ── Décision (étalonnage, mot ou pas mot) ───────────────────────────────────────────────────────
+# ── Décision (étalonnage) ───────────────────────────────────────────────────────
 
 class EcranDecision(EcranPartie):
     BINDINGS = [Binding("escape", "quitter", "Menu"), Binding("o", "oui", "Oui"), Binding("n", "non", "Non")]
@@ -1276,8 +1275,7 @@ class EcranDecision(EcranPartie):
     def demarrer(self) -> None:
         self.verif = False
         self.query_one("#saisie").display = False
-        q = "Connais-tu ce mot ?" if self.jeu.id == "etalonnage" else "Mot réel ?"
-        self.maj("detail", Text(f"{q}   O = oui · N = non", style=GRIS))
+        self.maj("detail", Text("Connais-tu ce mot ?   O = oui · N = non", style=GRIS))
         self._suivante()
 
     def _suivante(self) -> None:
@@ -1289,10 +1287,7 @@ class EcranDecision(EcranPartie):
         q = self.partie.suivante()
         self.maj("stimulus", Text(q.texte, style=f"bold {BLANC}"))
         tete = Text(f"{self.jeu.nom.upper()}  ", style="bold") + Text(f"{self.partie.n}", style=BLANC)
-        if self.jeu.id == "mot_ou_pas":
-            tete += Text("   " + "♥ " * self.partie.vies, style=BLANC) + Text(f"  {self.partie.score}", style=GRIS)
-        else:
-            tete += Text(f" / {self.params['questions']}", style=GRIS)
+        tete += Text(f" / {self.params['questions']}", style=GRIS)
         self.maj("entete", tete)
         self.chrono.reset()
 
@@ -1300,9 +1295,7 @@ class EcranDecision(EcranPartie):
         if not self.pret or self.verif or self.partie.finie:
             return
         lat, _ = self.chrono.mesures()
-        ok = self.partie.repondre(oui, lat)
-        if self.jeu.id == "mot_ou_pas":
-            self.maj("retour", Text("✓" if ok else "✗", style=f"bold {BLANC if ok else '#ff5f5f'}"))
+        self.partie.repondre(oui, lat)
         q = self.partie.question
         if oui and q.verifier:
             self.verif = True

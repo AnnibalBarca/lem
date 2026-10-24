@@ -54,8 +54,6 @@ def retablir_observations(con: sqlite3.Connection) -> int:
             obs = (0.9 if r["reponse"] == "oui" else 0.05, 1.0, "migration:etalonnage", False, True)
         elif jeu == "etalonnage" and r["type"] == "reponse" and data.get("verification"):
             obs = (None, 1.0, "migration:etalonnage:verification", True, True)
-        elif jeu == "mot_ou_pas" and r["type"] == "reponse":
-            obs = (0.7 if r["reponse"] == "oui" else 0.1, 0.4, "migration:mot_ou_pas", False, True)
         if obs is None:
             continue
         y, poids, source, depuis_note, propager = obs     # y None + depuis_note : la note de l'événement

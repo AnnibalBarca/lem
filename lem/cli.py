@@ -157,10 +157,29 @@ def cmd_noter(args) -> None:
     print(f"{n} réponses notées." + (" Carte de connaissance rejouée." if n else ""))
 
 
+def purger_mot_ou_pas(con) -> int:
+    """Delete the events (and what hangs off them) of the retired « Mot ou pas mot » game. Returns their count.
+    The only deliberate exception to the append-only journal: the user asked for this game's data to go."""
+    ids = [r[0] for r in con.execute("SELECT id FROM evenement WHERE jeu = 'mot_ou_pas'")]
+    for i in range(0, len(ids), 900):
+        lot = ids[i:i + 900]
+        marques = ", ".join("?" * len(lot))
+        con.execute(f"DELETE FROM notation WHERE evenement_id IN ({marques})", lot)
+        con.execute(f"DELETE FROM observation WHERE evenement_id IN ({marques})", lot)
+        con.execute(f"DELETE FROM evenement WHERE id IN ({marques})", lot)
+    con.execute("DELETE FROM session WHERE jeu = 'mot_ou_pas'")
+    con.commit()
+    return len(ids)
+
+
 def cmd_nettoyer(args) -> None:
     from lem import ingest
 
     ctx = _ctx(args)
+    if getattr(args, "mot_ou_pas", False):
+        n = purger_mot_ou_pas(ctx.con)
+        print(f"« Mot ou pas mot » : {n} événements supprimés du journal. `lem rebuild` rejoue l'état.")
+        return
     loc = ingest.retirer_locutions(ctx.con)
     print(f"locutions retirées de la base : {loc['supprimees']} · gardées parce que le journal les cite : "
           f"{loc['gardees_car_citees']}")
@@ -393,7 +412,9 @@ def main(argv: list[str] | None = None) -> None:
     n.add_argument("--limite", type=int, default=500)
     n.add_argument("--modele", default=argparse.SUPPRESS, help="sonnet | haiku | opus")
     n.set_defaults(f=cmd_noter)
-    sp.add_parser("nettoyer", help="retire les locutions et les gabarits « Définition manquante… » d'une base déjà ingérée").set_defaults(f=cmd_nettoyer)
+    nt = sp.add_parser("nettoyer", help="retire les locutions et les gabarits « Définition manquante… » d'une base déjà ingérée")
+    nt.add_argument("--mot-ou-pas", action="store_true", help="supprime du journal les données du jeu retiré « Mot ou pas mot »")
+    nt.set_defaults(f=cmd_nettoyer)
     sp.add_parser("rebuild").set_defaults(f=cmd_rebuild)
     it = sp.add_parser("interets", help="poids par domaine pour le choix des mots nouveaux : science=2 droit=0.5")
     it.add_argument("poids", nargs="*")
@@ -411,7 +432,7 @@ def main(argv: list[str] | None = None) -> None:
     s.set_defaults(f=cmd_simuler)
     sp.add_parser("atlas").set_defaults(f=cmd_atlas)
     mm = sp.add_parser("mots", help="tous les mots que les jeux t'ont montrés ou que tu as donnés, et ce que tu en sais")
-    mm.add_argument("--jeu", choices=["cartes", "bombe", "syllabaire", "memoire", "mot_ou_pas", "etalonnage"])
+    mm.add_argument("--jeu", choices=["cartes", "bombe", "syllabaire", "memoire", "etalonnage"])
     mm.add_argument("--tri", choices=["recent", "connu", "vu", "alpha"], default="recent")
     mm.add_argument("--max", type=int, default=0, help="seulement les N premiers (0 : tous)")
     mm.add_argument("--csv", action="store_true", help="sortie CSV, pour un tableur")
