@@ -16,6 +16,7 @@
   lem simuler              banc d'essai du moteur sur un élève simulé
   lem suites [--seuil 50]  les suites rares de la Bombe (sub-N) : combien, lesquelles, tes progrès
   lem atlas                imprime l'atlas dans le terminal
+  lem mots [--jeu bombe] [--tri connu] [--csv]   tous les mots vus et ce que tu en sais
   lem mot <forme>          le profil d'un mot : ses six mémoires (reconnu, défini, retrouvé, écrit, trouvé, encodé)
 """
 
@@ -259,6 +260,52 @@ def cmd_atlas(args) -> None:
     Console().print(rapport(ctx.con, ctx.lexique))
 
 
+def cmd_mots(args) -> None:
+    """Tous les mots que les jeux t'ont montrés ou que tu as donnés, et ce que le journal dit de chacun."""
+    import csv
+    from datetime import datetime
+
+    from lem.profil import LIBELLES, MEMOIRES, profils
+
+    ctx = _ctx(args)
+    ctx.carte                                   # base ancienne : mise à niveau d'abord
+    filtre, params = "", []
+    if args.jeu:
+        filtre, params = " AND jeu = ?", [args.jeu]
+    vus = {r["entree_id"]: r for r in ctx.con.execute(
+        f"""SELECT entree_id, GROUP_CONCAT(DISTINCT jeu) AS jeux, COUNT(*) AS n, MAX(ts) AS dernier
+            FROM evenement WHERE entree_id IS NOT NULL AND type IN ('stimulus', 'reponse', 'revelation', 'indice')
+            {filtre} GROUP BY entree_id""", params)}
+    ps = profils(ctx.con, list(vus))
+    noms = dict(ctx.con.execute(f"SELECT id, forme FROM entree WHERE id IN ({', '.join('?' * len(vus))})", list(vus))) \
+        if vus else {}
+    lignes = []
+    for eid, v in vus.items():
+        x = ps.get(eid)
+        lignes.append({"mot": noms.get(eid, "?"), "jeux": v["jeux"], "vu": v["n"], "dernier": v["dernier"][:16],
+                       **{m: (None if x is None else getattr(x, m)) for m in MEMOIRES},
+                       "trouve": (x.detail.get("trouve") if x else None)})
+    cle = {"recent": lambda r: r["dernier"], "connu": lambda r: -(r["connu"] or 0), "vu": lambda r: -r["vu"],
+           "alpha": lambda r: r["mot"].lower()}[args.tri]
+    lignes.sort(key=cle, reverse=(args.tri == "recent"))
+    lignes = lignes[: args.max] if args.max else lignes
+    if args.csv:
+        w = csv.writer(sys.stdout)
+        w.writerow(["mot", "jeux", "vu", "dernier", *[LIBELLES[m] for m in MEMOIRES]])
+        for r in lignes:
+            w.writerow([r["mot"], r["jeux"], r["vu"], r["dernier"], *[("" if r[m] is None else f"{r[m]:.2f}") for m in MEMOIRES]])
+        return
+    pct = lambda v: "   ·" if v is None else f"{v:4.0%}"  # noqa: E731
+    print(f"{len(vus)} mots vus"
+          + (f" (jeu : {args.jeu})" if args.jeu else "") + f" · tri : {args.tri}\n")
+    print(f"{'mot':<22}{'jeux':<22}{'vu':>3}  {'dernier':<16}" + "".join(f"{LIBELLES[m][:8]:>9}" for m in MEMOIRES))
+    for r in lignes:
+        print(f"{r['mot'][:21]:<22}{(r['jeux'] or '').replace('cartes', 'C').replace('bombe', 'B').replace('syllabaire', 'S').replace('memoire', 'M').replace('mot_ou_pas', 'D').replace('etalonnage', 'É')[:21]:<22}"
+              f"{r['vu']:>3}  {r['dernier']:<16}" + "".join(f"{pct(r[m]):>9}" for m in MEMOIRES))
+    print("\njeux : C Cartes · B Bombe · S Syllabaire · M Mémoire verbale · D Mot ou pas mot · É Étalonnage ; "
+          "· = pas encore mesuré. Détail d'un mot : lem mot <mot>.")
+
+
 def cmd_mot(args) -> None:
     from rich.console import Console
     from rich.text import Text
@@ -354,6 +401,12 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--params", help="paramètres du jeu de Cartes, en JSON")
     s.set_defaults(f=cmd_simuler)
     sp.add_parser("atlas").set_defaults(f=cmd_atlas)
+    mm = sp.add_parser("mots", help="tous les mots que les jeux t'ont montrés ou que tu as donnés, et ce que tu en sais")
+    mm.add_argument("--jeu", choices=["cartes", "bombe", "syllabaire", "memoire", "mot_ou_pas", "etalonnage"])
+    mm.add_argument("--tri", choices=["recent", "connu", "vu", "alpha"], default="recent")
+    mm.add_argument("--max", type=int, default=0, help="seulement les N premiers (0 : tous)")
+    mm.add_argument("--csv", action="store_true", help="sortie CSV, pour un tableur")
+    mm.set_defaults(f=cmd_mots)
     mo = sp.add_parser("mot", help="le profil d'un mot : ses six mémoires")
     mo.add_argument("forme")
     mo.set_defaults(f=cmd_mot)

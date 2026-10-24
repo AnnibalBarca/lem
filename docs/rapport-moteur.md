@@ -147,3 +147,27 @@ après un vrai délai, puis l'espacement d'une session à l'autre.
 * **Sonde plus légère** pour les mots très probablement connus (p > 0,8) : une décision oui/non avec
   pseudo-mots, comme l'Étalonnage, au lieu d'une définition à écrire.
 * **Calibrer le juge Haiku** contre Sonnet sur une centaine de définitions (accord, κ pondéré).
+
+## 7. Diversité des mots nouveaux (essai de la session PC, 24 octobre)
+
+Constat sur la vraie base : les sondes d'une session se suivent par familles (*érotiser, corporaliser,
+particulariser, satelliser…*) parce que le levier des morphèmes (`-iser` : 5 600 mots) met en tête des dizaines
+de cousins. `diversite` (Cartes, 0,3 par défaut, `/diversite 0` pour l'ôter) : choix glouton où chaque mot
+retenu rend moins probables, de ce facteur, ceux qui partagent un morphème avec lui.
+
+Banc, 3 graines par profil, `lem simuler --params '{"diversite": d}'` (d = 0,3 et 0,6 donnent exactement le même
+résultat : le classement bascule dès qu'une pénalité existe) :
+
+| Élève | Sens retenus/h | Mot retenus/h | Min. sur mots connus | Brier carte |
+|---|---|---|---|---|
+| faible | 13,8 → 13,9 | 11,2 → 10,6 | 22,0 → 18,2 | 0,078 → 0,082 |
+| moyen | 19,6 → 19,4 | 16,6 → 16,6 | 20,4 → 19,5 | 0,078 → 0,081 |
+| fort | 22,8 → 23,2 | 20,6 → 21,4 | 23,8 → 22,3 | 0,074 → 0,077 |
+
+Lecture : **neutre pour les mots retenus** (écarts dans le bruit, ± 0,5 à 1,5), **un peu moins de temps perdu sur des
+mots connus**, **carte légèrement moins nette** (+ 0,003 à + 0,004 de Brier, ≈ 1 écart-type). Ce n'est pas un gain
+au sens de la règle du banc : adoptée parce que le banc ne mesure pas la monotonie d'une session (l'utilisateur
+la trouve lassante) et que son coût mesuré est faible. À revoir sur le journal réel.
+
+Autre changement de la même session : `/intention` tapée en cours de partie ne s'enregistre plus (une intention
+« consolider » restée en réglage supprimait tout mot nouveau, sans que ce soit voulu).

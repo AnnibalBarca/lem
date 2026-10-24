@@ -403,7 +403,7 @@ class EcranPartie(Screen):
         style = BLANC if res.ok else PROXIMITES[Proximite.JUMEAU]
         self.maj("retour", Text(res.message, style=style))
         if res.change:
-            self.ctx.sauver_params(self.jeu, self.params)
+            self.ctx.sauver_params(self.jeu, self.params, en_partie=True)
             if self.pret:
                 self.reconfigurer()
         self.query_one("#saisie", Input).value = ""

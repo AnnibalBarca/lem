@@ -66,7 +66,14 @@ class Contexte:
             p[d.nom] = d.migrer(p.get(d.nom))
         return p
 
-    def sauver_params(self, jeu, params: dict) -> None:
+    def sauver_params(self, jeu, params: dict, *, en_partie: bool = False) -> None:
+        """en_partie : une commande tapée pendant la partie (/intention…). Les réglages éphémères du jeu valent
+        pour cette partie seulement : on garde la valeur enregistrée (celle de l'écran de réglages)."""
+        if en_partie and jeu.ephemeres:
+            params = dict(params)
+            deja = get_reglage(self.con, f"params:{jeu.id}", {})
+            for nom in jeu.ephemeres:
+                params[nom] = deja.get(nom, jeu.defauts().get(nom))
         set_reglage(self.con, f"params:{jeu.id}", params)
         self.con.commit()
 

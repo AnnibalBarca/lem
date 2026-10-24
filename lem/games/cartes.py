@@ -61,8 +61,11 @@ CARTES = enregistrer(Jeu(
         Param("nouveaux", "Mots nouveaux (max)", int, 20, "plafond ; la charge de révisions décide en dessous", 0, 200),
         Param("revisions_max", "Révisions max", int, 150, "", 0, 2000),
         Param("noms_propres", "Noms propres et sigles", bool, False, "les apprendre aussi (prénoms, lieux, sigles)"),
+        Param("diversite", "Diversité des mots nouveaux", float, 0.3, "0 = aucune ; chaque mot choisi rend moins "
+              "probables ses cousins de morphème (assez de -iser : la session ne doit pas se ressembler)", 0, 0.95),
         *PARAMS_FILTRES,
     ],
+    ephemeres=("intention",),
 ))
 
 
@@ -224,7 +227,34 @@ class PartieCartes:
             return v * (1 + 0.5 * reveles.get(r["id"], 0))
 
         cands.sort(key=valeur, reverse=True)
-        return [r["id"] for r in cands[:n]]
+        return self._diversifier(cands, valeur, n)
+
+    def _diversifier(self, cands, valeur, n: int) -> list[int]:
+        """Choix glouton : chaque mot retenu rend moins probables, par `diversite`, ceux qui partagent un morphème
+        avec lui. Sans cela, le levier des morphèmes met en tête des dizaines de mots de la même famille
+        (érotiser, corporaliser, particulariser…) et la session se ressemble de bout en bout."""
+        d = self.params.get("diversite", 0.6)
+        if not d or len(cands) <= 1:
+            return [r["id"] for r in cands[:n]]
+        top = cands[: 4 * n]
+        ids = [r["id"] for r in top]
+        morphs: dict[int, list[int]] = {}
+        for a in range(0, len(ids), 900):
+            lot = ids[a:a + 900]
+            for e, m in self.con.execute(
+                    f"SELECT entree_id, morpheme_id FROM entree_morpheme WHERE entree_id IN ({', '.join('?' * len(lot))})", lot):
+                morphs.setdefault(e, []).append(m)
+        base = {r["id"]: valeur(r) for r in top}
+        vus: dict[int, int] = {}
+        choisis: list[int] = []
+        restants = list(top)
+        while restants and len(choisis) < n:
+            meilleur = max(restants, key=lambda r: base[r["id"]] * (1 - d) ** sum(vus.get(m, 0) for m in morphs.get(r["id"], ())))
+            restants.remove(meilleur)
+            choisis.append(meilleur["id"])
+            for m in morphs.get(meilleur["id"], ()):
+                vus[m] = vus.get(m, 0) + 1
+        return choisis
 
     def _item_de(self, t: Tache) -> Item | None:
         it = self._item(t.exercice if t.exercice != "discrimination" else "recep", t.entree_id, t.sens_id,

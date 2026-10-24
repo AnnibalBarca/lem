@@ -320,3 +320,22 @@ def test_migration_v3_mots_tapes_ne_propagent_plus(con, carte):
     assert con.execute("SELECT SUM(propager) FROM observation WHERE source = 'bombe:spontane'").fetchone()[0] == 0
     apres = CarteConnaissance(con)
     assert apres.theta.get("type:mot", 0) == 0 and apres.n_obs(eid(con, "acronyme")) == 1
+
+
+def test_lem_mots(tmp_path, capsys):
+    from lem.cli import main
+    from lem.db import connect
+    from lem.journal import Evenement, ecrire
+
+    chemin = tmp_path / "t.sqlite"
+    main(["--db", str(chemin), "demo", "--sans-jeu"])
+    con = connect(chemin)
+    a = eid(con, "acronyme")
+    ecrire(con, None, Evenement("bombe", "reponse", entree_id=a, trace="prod", reponse="acronyme", correct=True, latence_ms=2400))
+    con.commit()
+    con.close()
+    main(["--db", str(chemin), "mots"])
+    sortie = capsys.readouterr().out
+    assert "1 mots vus" in sortie and "acronyme" in sortie and "B" in sortie
+    main(["--db", str(chemin), "mots", "--csv"])
+    assert capsys.readouterr().out.splitlines()[1].startswith("acronyme,bombe,1,")

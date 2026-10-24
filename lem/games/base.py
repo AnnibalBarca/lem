@@ -92,6 +92,7 @@ class Jeu:
     accroche: str
     description: str
     params: list[Param] = field(default_factory=list)
+    ephemeres: tuple[str, ...] = ()      # réglages qu'une commande en cours de partie ne sauvegarde pas (« /intention »)
 
     def defauts(self) -> dict:
         return {p.nom: p.defaut for p in self.params}

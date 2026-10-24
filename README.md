@@ -65,6 +65,9 @@ de bge-m3 et Whisper). `/juge haiku`, `/juge sonnet`, `/juge qwen3:8b`, `/juge n
 **Six mémoires par mot.** Reconnu, défini, retrouvé, écrit juste, trouvé vite, encodé : chaque jeu en
 mesure une partie, et l'Atlas montre où ça manque (`lem mot thuriféraire`, ou `/mot` en jeu).
 
+`lem mots` liste tous les mots que les jeux t'ont montrés ou que tu as donnés, avec ce que le journal en dit
+(reconnu, défini, retrouvé, écrit juste, trouvé vite, encodé) ; `--jeu bombe`, `--tri connu`, `--csv`.
+
 **Des mots, rien que des mots.** Ni expressions ni entrées de plusieurs mots (ils sont retirés de la base :
 `lem nettoyer`), ni noms propres, sigles ou mots à majuscule dans les jeux ; les mots à trait d'union restent
 des mots. Sur l'écran d'accueil, **1 à 6 lance le jeu** avec ses derniers réglages ; Entrée ouvre les réglages.

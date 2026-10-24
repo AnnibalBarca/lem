@@ -118,14 +118,27 @@ def test_bombe_confusables(con, carte, rng):
 
 def test_cartes_file_et_reponses(con, carte, rng, emb, magasins):
     ms, me = magasins
-    partie = PartieCartes(con, params("cartes", nouveaux=5, exercice="mixte"), carte, emb, ms, me, rng=rng)
-    assert partie.restant() > 0
-    vus = set()
-    while (it := partie.suivant()) is not None:
-        vus.add(it.exercice)
-        texte = it.forme if it.exercice == "prod" else ("1" if it.exercice == "discrimination" else it.definition)
-        res = partie.repondre(it, texte, 3000)
-        partie.valider(res, None)
+    from datetime import datetime, timedelta, timezone
+
+    from lem.db import regler_horloge
+
+    t = {"s": 0.0}
+    t0 = datetime.now(timezone.utc)
+    regler_horloge(lambda: t0 + timedelta(seconds=t["s"]))          # une minute par carte : le sens → mot a le temps de venir
+    try:
+        partie = PartieCartes(con, params("cartes", nouveaux=5, exercice="mixte"), carte, emb, ms, me, rng=rng)
+        assert partie.restant() > 0
+        vus = set()
+        while (it := partie.suivant()) is not None:
+            vus.add(it.exercice)
+            texte = it.forme if it.exercice == "prod" else ("1" if it.exercice == "discrimination" else it.definition)
+            if it.exercice == "recep" and len(vus) == 1:
+                texte = "je ne sais pas"                         # une sonde ratée : le mot s'apprend (duel, sens → mot)
+            res = partie.repondre(it, texte, 3000)
+            partie.valider(res, None)
+            t["s"] += 60
+    finally:
+        regler_horloge(None)
     assert {"recep", "prod"} <= vus
     assert con.execute("SELECT COUNT(*) FROM trace_etat").fetchone()[0] > 0
 
@@ -433,3 +446,32 @@ def test_pas_de_majuscule_initiale(con):
     formes = {r["forme"] for r in selectionner(con, filtres_depuis({}))}
     assert "Saint-Albanaise" not in formes and "acronyme" in formes
     assert "Saint-Albanaise" in {r["forme"] for r in selectionner(con, filtres_depuis({"type": ["mot", "nom_propre"]}))}
+
+
+def test_cartes_intention_ne_reste_pas(con):
+    """/intention en cours de partie vaut pour la partie : « consolider » ne devient pas le réglage de demain."""
+    from lem.contexte import Contexte
+    from lem.games import REGISTRE
+
+    jeu = REGISTRE["cartes"]
+    ctx = Contexte.__new__(Contexte)
+    ctx.con = con
+    ctx.sauver_params(jeu, {**jeu.defauts(), "intention": "equilibre", "nouveaux": 7})       # écran de réglages
+    ctx.sauver_params(jeu, {**jeu.defauts(), "intention": "consolider", "nouveaux": 9}, en_partie=True)
+    p = ctx.params(jeu)
+    assert p["intention"] == "equilibre" and p["nouveaux"] == 9
+
+
+def test_diversite_des_mots_nouveaux(con, carte, rng):
+    """Les mots nouveaux choisis ne sont pas tous de la même famille de morphème."""
+    from collections import Counter
+
+    for d in (0, 0.5):
+        partie = PartieCartes(con, params("cartes", nouveaux=10, diversite=d), carte, rng=rng)
+        vivier = [r for r in partie.con.execute("SELECT id, forme, zipf, type FROM entree WHERE type = 'mot'")]
+        ids = partie._classer_candidats(vivier, "equilibre", 12)
+        assert len(ids) == len(set(ids))
+        familles = Counter(m for e in ids for (m,) in con.execute(
+            "SELECT morpheme_id FROM entree_morpheme WHERE entree_id = ?", (e,)))
+        if d:
+            assert max(familles.values(), default=0) <= max(3, len(ids) // 3)
