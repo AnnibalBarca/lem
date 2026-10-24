@@ -56,6 +56,9 @@ CARTES = enregistrer(Jeu(
         Param("minutes", "Durée visée (min)", int, 15, "règle le nombre de mots nouveaux selon la charge", 3, 240),
         Param("exercice", "Exercice", str, "mixte", "recep | prod | mixte",
               choix=("recep", "prod", "mixte")),
+        Param("jugement_differe", "Jugement en file", bool, True,
+              "tu définis, Entrée, la carte suivante vient tout de suite : Claude juge en arrière-plan, son verdict "
+              "s'affiche sous la carte d'après et reste au journal", alias=("file",)),
         Param("confusables", "Duels de confusables", bool, True, "ajoute un duel à chaque mot appris"),
         Param("graphie", "Reprise des fautes de graphie", bool, True, "tes fautes reviennent jusqu'à être justes"),
         Param("nouveaux", "Mots nouveaux (max)", int, 20, "plafond ; la charge de révisions décide en dessous", 0, 200),

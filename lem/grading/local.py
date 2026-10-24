@@ -53,9 +53,9 @@ MODELES_CLAUDE = ("haiku", "sonnet", "opus")
 def juge_depuis_reglage(con: sqlite3.Connection):
     """Le juge en direct à utiliser, ou None.
 
-    auto  : le juge distillé s'il est installé (~/.lem/modeles, rapide, hors ligne), sinon le modèle local
-            par défaut s'il est déjà dans Ollama (PC avec GPU), sinon Claude Haiku si la commande `claude`
-            existe (Mac : rien de plus en mémoire, l'abonnement fait le travail).
+    auto  : Claude Haiku si la commande `claude` existe (rien de plus en mémoire, l'abonnement fait le travail ;
+            l'alias « haiku » suit le dernier Haiku), sinon le juge distillé s'il est installé (~/.lem/modeles,
+            hors ligne), sinon le modèle local par défaut s'il est déjà dans Ollama (PC avec GPU).
     distille : le juge distillé (cf. lem/grading/distille.py).
     haiku | sonnet | opus | claude:<modèle> : Claude Code headless.
     autre : un modèle Ollama (qwen3:8b…)."""
@@ -69,7 +69,7 @@ def juge_depuis_reglage(con: sqlite3.Connection):
         j = JugeDistille()
         return j if j.disponible() else None
     if m == "auto":
-        for j in (JugeDistille(), JugeLocal(MODELE_DEFAUT), JugeClaude("haiku")):
+        for j in (JugeClaude("haiku"), JugeDistille(), JugeLocal(MODELE_DEFAUT)):
             if j.disponible():
                 return j
         return None

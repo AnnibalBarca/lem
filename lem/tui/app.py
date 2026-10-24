@@ -296,6 +296,21 @@ class Reglages(Screen):
 
 # ── Socle des parties ───────────────────────────────────────────────────────────────────────────
 
+def _verdict_en_file(ctx, r) -> None:
+    """Runs on the UI thread when the judging queue reports (lem.grading.file): the verdict goes to the journal
+    and FSRS is replayed for that word, whether or not the card is still on screen."""
+    from lem.grading.claude_headless import appliquer
+    from lem.memory import scheduler
+
+    if r.verdict is not None:
+        appliquer(ctx.con, [r.element], [r.verdict], r.jeton["correcteur"])
+        ctx.con.commit()
+        scheduler.reconstruire(ctx.con, [r.element.entree_id])
+    gestionnaire = getattr(ctx, "sur_verdict", None)
+    if gestionnaire is not None:
+        gestionnaire(r)
+
+
 class EcranPartie(Screen):
     BINDINGS = [Binding("escape", "quitter", "Menu")]
 
@@ -365,6 +380,8 @@ class EcranPartie(Screen):
         return self.partie is not None and not self.occupe
 
     def on_unmount(self) -> None:
+        if getattr(self.ctx, "sur_verdict", None) == getattr(self, "_sur_verdict", None):
+            self.ctx.sur_verdict = None
         if self.session_id:
             fermer_session(self.ctx.con, self.session_id)
 
@@ -483,8 +500,10 @@ class EcranCartes(EcranPartie):
     def demarrer(self) -> None:
         self.item = None
         self.resultat = None
+        self.precedent = None            # the last card judged in the queue, shown under the next one
         self.faits = 0
         self.debut_session = now()
+        self.ctx.sur_verdict = self._sur_verdict
         self.suivant()
 
     def reconfigurer(self) -> None:
@@ -518,7 +537,7 @@ class EcranCartes(EcranPartie):
         saisie = self.query_one("#saisie", Input)
         saisie.value = ""
         self.maj("retour", "")
-        self.maj("detail", "")
+        self._maj_detail_file()
         if self.item is None:
             self._fin_de_session()
             return
@@ -585,7 +604,11 @@ class EcranCartes(EcranPartie):
             self.recopies = list(dict.fromkeys(d.correcte for d in self.resultat.fautes))
             self._reveler()
             self._demander_recopie()
+            self.precedent = None
             if self.item.exercice == "recep":
+                if not self.recopies and self._soumettre_en_file(self.resultat):
+                    self._avancer(None)
+                    return
                 self._juger(self.resultat)
             if self.resultat.correct and not self.recopies and self.item.exercice in ("prod", "graphie", "discrimination"):
                 self._auto = self.set_timer(self.AVANCE_AUTO, lambda: self._avancer(None))
@@ -594,6 +617,73 @@ class EcranCartes(EcranPartie):
         else:
             note = int(texte) if texte.strip() in {"1", "2", "3", "4"} and self.item.exercice != "graphie" else None
             self._avancer(note)
+
+    def _file(self):
+        """The judging queue shared by the whole session (one per judge), started and warmed up on first use."""
+        from lem.grading.file import FileJugement
+
+        juge = self.ctx.juge
+        if juge is None:
+            return None
+        f = self.ctx.__dict__.get("file_jugement")
+        if f is None or f.juge is not juge:
+            app, ctx = self.app, self.ctx
+            f = FileJugement(juge, lambda r: app.call_from_thread(_verdict_en_file, ctx, r))
+            self.ctx.__dict__["file_jugement"] = f
+        f.demarrer()
+        return f
+
+    def _soumettre_en_file(self, res) -> bool:
+        """Queued judging: hand the definition over and let the game move on. False = judge it the usual way
+        (mode off, no judge, or an empty answer: « je ne sais pas » stays on screen so the word can be read)."""
+        from lem.grading.claude_headless import element
+
+        if not self.params.get("jugement_differe", True) or self.partie is None:
+            return False
+        f = self._file()
+        el = element(self.ctx.con, res.evenement_id) if f else None
+        if el is None:
+            return False
+        res.juge_en_cours = True
+        self.precedent = res
+        f.soumettre(el, {"res": res, "correcteur": self.ctx.juge.correcteur})
+        return True
+
+    def _sur_verdict(self, r) -> None:
+        res = r.jeton["res"]
+        res.juge_en_cours = False
+        if r.verdict is not None:
+            res.verdict_local = r.verdict
+        if self.is_mounted and self.resultat is None:        # a fresh card is on screen: refresh the line under it
+            self._maj_detail_file()
+
+    def _maj_detail_file(self) -> None:
+        """Under the current card: the previous word with its verdict (or « … »), and the queue length."""
+        from lem.grading.taxonomie import PRECISION as LIBELLES
+
+        t = Text()
+        r = getattr(self, "precedent", None)
+        if r is not None:
+            ok = {True: "✓", False: "✗", None: "?"}[r.correct]
+            t.append(f"précédent  {ok} {r.item.forme}", style=f"bold {BLANC}")
+            if r.recep:
+                t.append("   ")
+                t += thermometre(r.recep.temperature)
+            if r.sens:
+                t.append(f"\n  {r.sens[0][1][:140]}", style=GRIS)
+            v = getattr(r, "verdict_local", None)
+            if v is not None:
+                t.append(f"\n  juge : {v.precision}/5 {LIBELLES[v.precision]} · {v.erreur.value.replace('_', ' ')}",
+                         style=BLANC)
+                if v.commentaire:
+                    t.append(f"\n  {v.commentaire}", style=GRIS)
+            elif getattr(r, "juge_en_cours", False):
+                t.append("\n  … en cours de jugement", style=SOMBRE)
+        f = self.ctx.__dict__.get("file_jugement")
+        if f is not None and f.en_attente:
+            t.append(f"{chr(10) if r is not None else ''}\n⏳ {f.en_attente} définition(s) en attente de jugement",
+                     style=SOMBRE)
+        self.maj("detail", t)
 
     def _juger(self, res) -> None:
         """Le juge local note la définition en fond ; l'écran reste libre, le verdict arrive ~1 s après."""

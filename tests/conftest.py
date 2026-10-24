@@ -23,6 +23,12 @@ def cache_isole(tmp_path, monkeypatch):
     monkeypatch.setattr(vecteurs, "DOSSIER_CACHE", tmp_path / "cache-lem")
 
 
+@pytest.fixture(autouse=True)
+def pas_de_vrai_claude(monkeypatch):
+    """Tests never reach the real `claude` command (it would spend quota and make runs depend on the machine)."""
+    monkeypatch.setenv("LEM_CLAUDE_CMD", "lem-claude-absent-pendant-les-tests")
+
+
 @pytest.fixture
 def con():
     c = connect(":memory:")
