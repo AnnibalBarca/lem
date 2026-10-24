@@ -42,10 +42,11 @@ def suite_de(c: int, longueur: int) -> str:
     return "".join(reversed(lettres))
 
 
-def _compter(normes: list[str], comptes: dict[int, np.ndarray], tranche: int = 200_000) -> None:
-    """Ajoute à `comptes[L]` le nombre de normes contenant chaque suite de L lettres (une fois par norme)."""
-    for a in range(0, len(normes), tranche):
-        bloc = "\x00".join(normes[a:a + tranche]) + "\x00"
+def paires(normes: list[str], chunk: int = 200_000):
+    """Yield (a, L, idx, code) per chunk starting at norm index `a`: every distinct (norm, sequence) pair, where
+    `idx` is the index (in `normes`) of a norm that contains the sequence `code` of L letters, once per norm."""
+    for a in range(0, len(normes), chunk):
+        bloc = "\x00".join(normes[a:a + chunk]) + "\x00"
         b = np.frombuffer(bloc.encode("utf-8"), dtype=np.uint8)
         v = _LUT[b]                                   # les octets non a–z (accents restants, tirets…) valent 0
         fid = np.cumsum(b == 0)                       # numéro de la norme de chaque octet, dans la tranche
@@ -60,7 +61,14 @@ def _compter(normes: list[str], comptes: dict[int, np.ndarray], tranche: int = 2
                 ok &= vj > 0
                 c = c * BASE + vj
             cles = np.unique(fid[:n][ok] * BASE ** L + c[ok])     # une fois par norme
-            comptes[L] += np.bincount(cles % BASE ** L, minlength=BASE ** L)
+            yield a, L, a + cles // BASE ** L, cles % BASE ** L
+
+
+def _compter(normes: list[str], comptes: dict[int, np.ndarray], tranche: int = 200_000, poids=None) -> None:
+    """Ajoute à `comptes[L]` le nombre de normes contenant chaque suite de L lettres (une fois par norme) ;
+    avec `poids` (un poids par norme), la somme des poids au lieu du nombre."""
+    for _, L, idx, code in paires(normes, tranche):
+        comptes[L] += np.bincount(code, weights=None if poids is None else poids[idx], minlength=BASE ** L)
 
 
 class IndexSuites:

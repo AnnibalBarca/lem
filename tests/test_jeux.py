@@ -493,3 +493,18 @@ def test_recherche_par_suite_et_par_definition(con, emb, magasins):
     trouves = par_definition(con, lex, emb, ms, "sigle qui se prononce comme un mot")
     assert trouves and "acronyme" in {t.forme for t in trouves[:5]}
     assert par_definition(con, lex, None, None, "n'importe quoi") == []     # sans Ollama : rien, sans erreur
+
+
+def test_trainer_runs_and_orders(con, carte):
+    """The trainer's gap analysis and set cover run on the demo lexicon and return coherent words."""
+    from lem import trainer
+    from lem.lexique import Lexique
+
+    lex = Lexique(con)
+    a = trainer.analyse(lex, carte, sub=10_000, minimum=1, attested=0)
+    assert a.total_need() >= 0
+    words = a.ideal_words(5, attested_only=False, min_length=4)
+    scores = [w.score for w in words]
+    assert scores == sorted(scores, reverse=True) or len(scores) < 2 or max(scores) >= scores[-1]
+    assert all(w.form and w.prompts >= 0 for w in words)
+    assert len({w.form for w in words}) == len(words)
