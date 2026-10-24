@@ -122,6 +122,17 @@ class PartieCartes:
         return self.con.execute("SELECT * FROM sens WHERE entree_id = ? AND definition != '' ORDER BY rang LIMIT 1",
                                 (entree_id,)).fetchone()
 
+    def _sens_indice(self, entree_id: int, forme: str, prefere: int = 0) -> sqlite3.Row | None:
+        """The sense to show as a clue when the player must write the word: the preferred one if it is a good
+        clue (lem.definitions), else the first sense that is. None: the word gets recognition cards only."""
+        from lem.definitions import first_usable_sense
+
+        lignes = self.con.execute("SELECT id, definition FROM sens WHERE entree_id = ? AND definition != '' ORDER BY rang",
+                                  (entree_id,)).fetchall()
+        lignes = sorted(lignes, key=lambda r: r["id"] != prefere)
+        choix = first_usable_sense([(r["id"], r["definition"]) for r in lignes], forme)
+        return self.con.execute("SELECT * FROM sens WHERE id = ?", (choix[0],)).fetchone() if choix else None
+
     def _voisins(self, entree_id: int) -> list[dict]:
         voisins = []
         for c in grappe(self.con, entree_id, self.magasin_entrees, self.index, k=5):
@@ -137,6 +148,10 @@ class PartieCartes:
         s = self._sens_principal(entree_id, sens_id)
         if e is None or s is None:
             return None
+        if exercice in ("prod", "graphie"):          # the clue must point to ONE word (« Microphone. » → micro: no)
+            s = self._sens_indice(entree_id, e["forme"], s["id"])
+            if s is None:
+                return None
         it = Item(exercice, entree_id, s["id"], e["forme"], e["pos"],
                   s["definition_precise"] or s["definition"], self._voisins(entree_id) if voisins else [], nouveau=nouveau)
         it.voisins_differes = not voisins
@@ -165,6 +180,9 @@ class PartieCartes:
             self._hors_jeu |= {r[0] for r in self.con.execute(
                 "SELECT id FROM entree WHERE type = 'expression' OR instr(forme, ' ') > 0")}
         vivier = [r for r in vivier if r["type"] not in exclus]
+        from lem.games.pool import secondaires
+
+        self._hors_jeu |= secondaires(self.con)            # feminine / plural entries, spelling variants: never due
 
         # Révisions : dues maintenant (consolider : aussi les fragiles des deux jours à venir).
         quand = now() + timedelta(days=2) if intention == "consolider" else now()
@@ -287,6 +305,10 @@ class PartieCartes:
         rivaux = [(v["mot"], v) for v in it.voisins[:3]]
         if not rivaux:
             return None
+        indice = self._sens_indice(it.entree_id, it.forme, it.sens_id)
+        if indice is None:                           # no definition that points to one word: no duel either
+            return None
+        it.sens_id, it.definition = indice["id"], indice["definition_precise"] or indice["definition"]
         opts = [(it.entree_id, it.forme)]
         for mot, _ in rivaux:
             r = self.con.execute("SELECT id FROM entree WHERE forme = ? LIMIT 1", (mot,)).fetchone()

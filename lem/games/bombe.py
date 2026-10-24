@@ -37,7 +37,7 @@ from lem.confusables import IndexFormel
 from lem.games.base import PARAMS_FILTRES, Jeu, Param, enregistrer, filtres_depuis
 from lem.games.pool import selectionner
 from lem.journal import Evenement, Frappe, ecrire, nettoyer_saisie
-from lem.memory.knowledge import CarteConnaissance, score_apprentissage
+from lem.memory.knowledge import POIDS_PRODUIT, CarteConnaissance, score_apprentissage
 from lem.orthographe import Diagnostic, accents_manquants, accents_tolerants, diagnostiquer, enregistrer_faute
 from lem.similarite import Comparaison, Proximite, comparer, enregistrer_confusion
 from lem.texte import normaliser
@@ -480,7 +480,7 @@ class PartieBombe:
                                                              frappe=frappe or Frappe(), data=data))
             # Sans propagation : on ne tape que des mots qu'on connaît (biais de sélection, cf. memory/migration.py).
             if not aide:                         # un mot donné par /d n'est pas une preuve de vocabulaire actif
-                self.carte.observer(eid, 1.0, poids=0.5, source="bombe:spontane", evenement_id=ev, propager=False)
+                self.carte.observer(eid, 1.0, poids=POIDS_PRODUIT, source="bombe:spontane", evenement_id=ev, propager=False)
             retour.revelation = self._apres_echec_cible(texte)
         retour.trouvaille = trouvailles(self.con, eid)
         self.score += retour.points

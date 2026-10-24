@@ -33,6 +33,8 @@ from lem.db import get_reglage, iso, now, set_reglage
 LR = {"global": 0.03, "zipf": 0.08, "origine": 0.15, "type": 0.15, "domaine": 0.2, "morph": 0.3}
 LR_RESIDU = 1.2
 TAU = 40.0
+# Poids d'un mot produit spontanément sous chrono (Bombe, Syllabaire) : la preuve la plus forte de connaissance.
+POIDS_PRODUIT = 4.0
 THETA_MAX = 4.0
 
 

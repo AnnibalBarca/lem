@@ -16,7 +16,7 @@ from .conftest import eid
 
 @pytest.mark.parametrize("saisie,correcte,types", [
     ("turiféraire", "thuriféraire", ["h_muet"]),
-    ("eminent", "éminent", ["accent"]),
+    ("eminent", "éminent", []),                      # accents are not faults (setting on by default)
     ("apeller", "appeler", ["consonne_double"]),
     ("occurence", "occurrence", ["consonne_double"]),
     ("acornyme", "acronyme", ["inversion"]),
@@ -131,3 +131,10 @@ def test_profil_avec_graphie_juste(con):
     ecrire(con, None, Evenement("cartes", "reponse", entree_id=a, trace="ortho", reponse="acronyme", correct=True,
                                 data={"exercice": "graphie", "graphie": None}))
     assert sum(occ for _, occ in profil(con).values()) >= 1
+
+
+def test_classer_strict_garde_l_accent():
+    from lem.orthographe import classer
+
+    assert classer("eminent", "éminent", strict=True) == ["accent"]
+    assert classer("eminnt", "éminent") == ["omission"]          # the other fault is still seen, accent aside

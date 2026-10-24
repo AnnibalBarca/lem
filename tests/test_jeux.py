@@ -508,3 +508,33 @@ def test_trainer_runs_and_orders(con, carte):
     assert scores == sorted(scores, reverse=True) or len(scores) < 2 or max(scores) >= scores[-1]
     assert all(w.form and w.prompts >= 0 for w in words)
     assert len({w.form for w in words}) == len(words)
+
+
+
+def test_indices_de_production(con, carte, rng):
+    """A clue that is one word, a clipping of the answer, or a pointer is never shown when the player must write."""
+    from lem.definitions import usable_as_clue as ok
+
+    assert not ok("Microphone.", "micro") and not ok("Microphone d’un journaliste.", "micro")
+    assert not ok("Chant.", "hymne") and not ok("Abréviation de chapitre.", "chap") and not ok("Sigle.", "acronyme")
+    assert ok("Adepte du raëlisme.", "raëlien") and ok("Division cellulaire asexuée.", "mitose")
+    partie = PartieCartes(con, params("cartes", nouveaux=0), carte, rng=rng)
+    e = con.execute("INSERT INTO entree(forme, pos) VALUES('micro', 'nom')").lastrowid
+    con.execute("INSERT INTO sens(entree_id, rang, definition) VALUES(?, 1, 'Microphone.')", (e,))
+    assert partie._item("recep", e) is not None                   # word → sense is fine
+    assert partie._item("prod", e) is None and partie._item("graphie", e) is None
+
+
+def test_masculin_par_defaut_dans_les_cartes(con):
+    """The feminine entry (raëlienne) is secondary: cards use the masculine, the Bomb still accepts both."""
+    from lem.db import ajouter_formes, upsert_entree
+    from lem.games.pool import secondaires
+
+    m = upsert_entree(con, "raëlien", "nom")
+    f = upsert_entree(con, "raëlienne", "nom")
+    ajouter_formes(con, m, ["raëlien", "raëliens", "raëlienne"])
+    ajouter_formes(con, f, ["raëlienne", "raëliennes", "raëlien"])
+    con.commit()
+    sec = secondaires(con)
+    assert f in sec and m not in sec
+    assert con.execute("SELECT COUNT(*) FROM forme WHERE forme = 'raëlienne'").fetchone()[0] == 2     # still a valid form

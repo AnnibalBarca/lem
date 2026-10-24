@@ -30,7 +30,7 @@ from fsrs import Card, Rating
 from lem.db import now, parse_iso
 from lem.games.base import Jeu, Param, enregistrer
 from lem.journal import Evenement, Frappe, ecrire, nettoyer_saisie
-from lem.memory.knowledge import CarteConnaissance
+from lem.memory.knowledge import POIDS_PRODUIT, CarteConnaissance
 from lem.orthographe import Diagnostic, accents_manquants, accents_tolerants, diagnostiquer, enregistrer_faute
 from lem.suites import TYPES_HORS_JEU, IndexSuites
 from lem.texte import normaliser
@@ -266,7 +266,7 @@ class PartieSyllabaire:
             "syllabaire", "reponse", entree_id=eid, trace="prod", reponse=cle, correct=True, latence_ms=latence_ms,
             frappe=frappe or Frappe(), data={"suite": t.suite, "n": t.n, "rang": len(t.donnes), "fsrs": False}))
         # Sans propagation : un mot tapé librement est connu par construction (cf. memory/migration.py).
-        self.carte.observer(eid, 1.0, poids=0.5, source="syllabaire", evenement_id=ev, propager=False)
+        self.carte.observer(eid, 1.0, poids=POIDS_PRODUIT, source="syllabaire", evenement_id=ev, propager=False)
         return Reponse(True, "", cle, eid, inedit)
 
     def terminer(self, duree_ms: int | None = None) -> Bilan:

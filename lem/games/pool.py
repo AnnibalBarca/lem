@@ -83,6 +83,15 @@ def secondaires(con: sqlite3.Connection) -> set[int]:
     ids = {r[0] for r in con.execute(
         f"""SELECT s.entree_id FROM sens s GROUP BY s.entree_id
             HAVING SUM(CASE WHEN {motifs} THEN 1 ELSE 0 END) = COUNT(*)""", DEFINITIONS_VARIANTES)}
+    # The feminine and the plural are entries of their own in the Wiktionary (raëlienne, actrice, infirmière…): each
+    # lists the other among its forms. The longer one is the secondary; in French the masculine singular is the
+    # default (« Adepte du raëlisme. » → raëlien). Both stay valid answers in the Bomb: only the cards skip it.
+    ids |= {r[0] for r in con.execute(
+        """SELECT DISTINCT e.id FROM entree e
+           JOIN forme fe ON fe.entree_id = e.id AND fe.forme != lower(e.forme)
+           JOIN entree m ON m.forme = fe.forme AND m.id != e.id AND m.pos = e.pos AND m.langue = e.langue
+           JOIN forme fm ON fm.entree_id = m.id AND fm.forme = lower(e.forme)
+           WHERE e.langue = 'fr' AND length(m.forme) < length(e.forme) AND e.forme NOT GLOB '[A-Z]*'""")}
     normes = {normaliser(r[0]) for r in con.execute("SELECT forme FROM entree WHERE instr(forme, '-') = 0")}
     for eid, forme in con.execute("SELECT id, forme FROM entree WHERE instr(forme, '-') > 0 AND instr(forme, ' ') = 0"):
         tete, _, reste = forme.partition("-")

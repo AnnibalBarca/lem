@@ -70,12 +70,14 @@ def seuil_distance(n: int) -> int:
     return 1 if n <= 4 else 2 if n <= 9 else 3
 
 
-def classer(saisie: str, correcte: str) -> list[str]:
+def classer(saisie: str, correcte: str, strict: bool = False) -> list[str]:
+    """Fault types of `saisie` against `correcte`. Accents are not faults (they are compared away) unless `strict`
+    (the « /accents non » setting): then an accent difference is typed « accent »."""
     s, c = saisie.lower(), correcte.lower()
+    if not strict:
+        s, c = sans_accents(s), sans_accents(c)
     if s == c:
-        return []
-    if sans_accents(s) == sans_accents(c):
-        return ["accent"]
+        return [] if not strict or saisie.lower() == correcte.lower() else ["accent"]
     types: list[str] = []
     if OSA.distance(s, c) < Levenshtein.distance(s, c):
         types.append("inversion")
@@ -140,14 +142,19 @@ class Diagnostic:
         return d
 
 
-def _evaluer(saisie: str, correcte: str, entree_id: int, ambigus: int = 1) -> Diagnostic | None:
+def _evaluer(saisie: str, correcte: str, entree_id: int, ambigus: int = 1, strict: bool = False) -> Diagnostic | None:
     s, c = saisie.lower(), correcte.lower()
+    if not strict:                                      # accents ignored: « raelien » is « raëlien »
+        s, c = sans_accents(s), sans_accents(c)
     d = OSA.distance(s, c)
     homo = cle_phonetique(s) == cle_phonetique(c)
-    if d == 0 or (d > seuil_distance(len(c)) and not homo and sans_accents(s) != sans_accents(c)):
+    if d == 0 and not (strict and saisie.lower() != correcte.lower()):
+        return None
+    if d > seuil_distance(len(c)) and not homo and sans_accents(s) != sans_accents(c):
         return None
     conf = max(0.05, 1 - d / max(len(c), 1)) * (1.15 if homo else 1.0) / ambigus
-    return Diagnostic(saisie, correcte, entree_id, d, classer(s, c), homo, round(min(conf, 1.0), 3))
+    return Diagnostic(saisie, correcte, entree_id, max(d, 1 if strict else d), classer(saisie, correcte, strict), homo,
+                      round(min(conf, 1.0), 3))
 
 
 def est_forme(con: sqlite3.Connection, saisie: str) -> bool:
@@ -155,9 +162,9 @@ def est_forme(con: sqlite3.Connection, saisie: str) -> bool:
 
 
 # ── Accents manquants ──────────────────────────────────────────────────────────────────────────
-# Réglage global (« accents_tolerants », vrai par défaut) : un accent ou une ligature MANQUANTS ne sont pas
-# des fautes (« creolisation » vaut « créolisation », « oeuvre » vaut « œuvre »). Un accent FAUX en reste
-# une (« crèolisation »), comme un trait d'union ou une apostrophe manquants. Désactivable : /accents non.
+# Global setting (« accents_tolerants », on by default): accents are not spelling faults at all — missing,
+# wrong or extra (« creolisation », « crèolisation » and « créolisation » are the same word; « oeuvre » is
+# « œuvre »). A missing hyphen or apostrophe is still a fault. « /accents non » makes them count again.
 
 def accents_tolerants(con: sqlite3.Connection) -> bool:
     from lem.db import get_reglage
@@ -166,23 +173,11 @@ def accents_tolerants(con: sqlite3.Connection) -> bool:
 
 
 def accents_manquants(saisie: str, forme: str) -> bool:
-    """Vrai si `saisie` est `forme` à des accents ou ligatures manquants près (casse ignorée)."""
+    """True if `saisie` is `forme` up to accents, diaeresis, cedilla and ligatures (any of them missing, wrong or
+    extra: « raelien », « raélien », « raëlien » are the same word). Hyphens and apostrophes still count. Casse
+    ignored. (Name kept from when only MISSING accents were tolerated.)"""
     s, f = saisie.strip().lower(), forme.strip().lower()
-    if s == f:
-        return True
-    if normaliser(s) != normaliser(f):
-        return False
-    i = 0
-    for ch in f:
-        if s.startswith(ch, i):
-            i += len(ch)
-            continue
-        base = normaliser(ch)
-        if base and s.startswith(base, i):
-            i += len(base)
-            continue
-        return False
-    return i == len(s)
+    return s == f or normaliser(s) == normaliser(f)
 
 
 def formes_tolerees(con: sqlite3.Connection, saisie: str) -> list[tuple[str, int]]:
@@ -202,14 +197,16 @@ def diagnostiquer(con: sqlite3.Connection, saisie: str, cible_id: int | None = N
     # 1. La cible attendue, si on en a une (cartes, bombe en apprentissage).
     if cible_id is not None:
         formes = [r[0] for r in con.execute("SELECT forme FROM forme WHERE entree_id = ?", (cible_id,))]
-        meilleur = min((_evaluer(s, f, cible_id) for f in formes), key=lambda x: x.distance if x else 99, default=None)
+        strict = not accents_tolerants(con)
+        meilleur = min((_evaluer(s, f, cible_id, strict=strict) for f in formes), key=lambda x: x.distance if x else 99,
+                       default=None)
         if meilleur:
             return meilleur
     # 2. Même mot sans accents (érreur d'accent quasi certaine).
     rows = con.execute("SELECT forme, entree_id FROM forme WHERE norme = ?", (normaliser(s),)).fetchall()
     if rows:
         f, eid = rows[0]
-        d = _evaluer(s, f, eid, ambigus=max(1, len({r[0] for r in rows})))
+        d = _evaluer(s, f, eid, ambigus=max(1, len({r[0] for r in rows})), strict=not accents_tolerants(con))
         if d:
             d.alternatives = sorted({r[0] for r in rows} - {f})
             return d
@@ -231,7 +228,7 @@ def diagnostiquer(con: sqlite3.Connection, saisie: str, cible_id: int | None = N
     meilleur_mot, dist, _ = res[0]
     ex_aequo = [m for m, d, _ in res if d == dist]
     eid = con.execute("SELECT entree_id FROM forme WHERE forme = ? LIMIT 1", (meilleur_mot,)).fetchone()[0]
-    d = _evaluer(s, meilleur_mot, eid, ambigus=len(ex_aequo))
+    d = _evaluer(s, meilleur_mot, eid, ambigus=len(ex_aequo), strict=not accents_tolerants(con))
     if d:
         d.alternatives = [m for m in ex_aequo if m != meilleur_mot]
     return d

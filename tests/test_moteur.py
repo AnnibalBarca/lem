@@ -100,8 +100,8 @@ def test_prod_exact_flechi_et_confusion(con):
     v = noter_prod(con, a, "homonyme")
     assert not v.correct and v.comparaison.proximite == Proximite.FORME
     assert noter_prod(con, eid(con, "thuriféraire"), "laudateur").mode == "synonyme"
-    assert noter_prod(con, eid(con, "éminent"), "eminent").correct      # accent manquant : toléré par défaut
-    assert not noter_prod(con, eid(con, "éminent"), "èminent").correct   # accent faux : faute
+    assert noter_prod(con, eid(con, "éminent"), "eminent").correct      # accents ignored by default…
+    assert noter_prod(con, eid(con, "éminent"), "èminent").correct      # … missing or wrong
     set_reglage(con, "accents_tolerants", False)                        # mode strict : accent manquant = faute
     v = noter_prod(con, eid(con, "éminent"), "eminent")
     assert not v.correct and v.mode == "graphie" and v.graphie.types == ["accent"]
@@ -112,7 +112,7 @@ def test_accents_manquants():
 
     assert accents_manquants("creolisation", "créolisation") and accents_manquants("oeuvre", "œuvre")
     assert accents_manquants("Eminent", "éminent")
-    assert not accents_manquants("crèolisation", "créolisation")        # accent faux
+    assert accents_manquants("crèolisation", "créolisation")            # a wrong accent is not a fault either
     assert not accents_manquants("portemanteau", "porte-manteau")       # le trait d'union compte
     assert not accents_manquants("aujourdhui", "aujourd'hui")
 
@@ -355,3 +355,13 @@ def test_estimation_connus_et_recalibrage(con):
     assert p is not None
     _, prior2 = estimation_connus(con)
     assert abs(prior2 - prior) < 0.1 * max(prior, 1)     # la cible (clamp compris) est retrouvée sur les mots restants
+
+
+def test_mot_produit_sous_chrono_est_connu(con, carte):
+    """Un mot tapé spontanément (poids POIDS_PRODUIT) doit sortir nettement 'connu', pas à peine relevé."""
+    from lem.memory.knowledge import POIDS_PRODUIT
+
+    e = eid(con, "acronyme")
+    avant = carte.p(e)
+    carte.observer(e, 1.0, poids=POIDS_PRODUIT, source="bombe:spontane", propager=False)
+    assert carte.p(e) > max(0.9, avant)

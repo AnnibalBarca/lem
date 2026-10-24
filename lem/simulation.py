@@ -439,7 +439,7 @@ def banc_productions(n_tapes: int = 300, *, propager: bool = True, graine: int =
     elle propage aux θ (type, origine, bande de fréquence…), tout le lexique monte. On fait taper à l'élève
     `n_tapes` mots qu'il sait produire (les plus courants plus souvent), puis on mesure la carte sur les mots
     qu'il n'a PAS tapés : Brier contre la vérité, et Σ P(connu) contre le nombre de mots qu'il connaît."""
-    from lem.memory.knowledge import CarteConnaissance, ParamsPrior, calibrer
+    from lem.memory.knowledge import POIDS_PRODUIT, CarteConnaissance, ParamsPrior, calibrer
 
     if isinstance(params_eleve, str):
         params_eleve = PROFILS[params_eleve]
@@ -468,7 +468,7 @@ def banc_productions(n_tapes: int = 300, *, propager: bool = True, graine: int =
 
     avant = mesure()
     for e in tapes:
-        carte.observer(e, 1.0, poids=0.5, persister=False, source="bombe:spontane", propager=propager)
+        carte.observer(e, 1.0, poids=POIDS_PRODUIT, persister=False, source="bombe:spontane", propager=propager)
     apres = mesure()
     return {"tapes": len(tapes), "propager": propager, "avant": avant, "apres": apres}
 

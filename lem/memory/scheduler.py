@@ -128,6 +128,31 @@ def _sauver(con: sqlite3.Connection, entree_id: int, sens_id: int, trace: str, c
     )
 
 
+def _fautes_d_accent(con: sqlite3.Connection, rows) -> set[int]:
+    """Ids of the spelling events whose only fault was an accent: accents are not faults (setting
+    `accents_tolerants`, on by default), so those answers, recorded before the policy, are replayed as if absent.
+    The journal itself is untouched."""
+    from lem.db import get_reglage
+    from lem.texte import normaliser
+
+    if not get_reglage(con, "accents_tolerants", True):
+        return set()
+    out: set[int] = set()
+    ortho = [r for r in rows if r["trace"] == "ortho"]
+    if not ortho:
+        return out
+    formes: dict[int, set[str]] = {}
+    for r in ortho:
+        if r["entree_id"] not in formes:
+            formes[r["entree_id"]] = {normaliser(f[0]) for f in con.execute(
+                "SELECT forme FROM forme WHERE entree_id = ?", (r["entree_id"],))}
+        saisie = (con.execute("SELECT reponse FROM evenement WHERE id = ?", (r["id"],)).fetchone()[0] or "").strip()
+        types = (json.loads(r["data"]).get("graphie") or {}).get("types")
+        if types == ["accent"] or (saisie and normaliser(saisie) in formes[r["entree_id"]]):
+            out.add(r["id"])
+    return out
+
+
 def reconstruire(con: sqlite3.Connection, entree_ids: list[int] | None = None) -> int:
     """Rejoue le journal pour (re)construire trace_etat. Renvoie le nombre de traces."""
     scheds = _Ordonnanceurs(con)
@@ -145,9 +170,10 @@ def reconstruire(con: sqlite3.Connection, entree_ids: list[int] | None = None) -
         args,
     ).fetchall()
     etats: dict[tuple[int, int, str], tuple[Card, int, int, str | None]] = {}
+    ignorer = _fautes_d_accent(con, rows)
     for r in rows:
         data = json.loads(r["data"])
-        if data.get("fsrs") is False:
+        if data.get("fsrs") is False or r["id"] in ignorer:
             continue
         note = note_finale(con, r["id"], r["note_auto"])
         if note is None:
