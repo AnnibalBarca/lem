@@ -32,7 +32,7 @@ PREFIXES = (
 )
 MOTS_OUTILS = {"de", "du", "des", "la", "le", "les", "l", "d", "en", "à", "au", "aux", "et", "sur", "sous", "a",
                "un", "une", "par", "pour", "sans", "ou"}
-COSINUS_BAS, COSINUS_HAUT = 0.45, 0.75      # transparency 0 below, 1 above (bge-m3: unrelated ≈ 0.3–0.45)
+COSINUS_BAS, COSINUS_HAUT = 0.62, 0.76      # transparency 0 below, 1 above (bge-m3: unrelated ≈ 0.3–0.45)
 FORCE = 0.85                                 # a fully transparent word keeps 15 % of its priority
 
 
