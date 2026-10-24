@@ -115,6 +115,14 @@ def mots_recents(con, n: int = 12) -> list[str]:
     return list(dict.fromkeys(m for m in mots if len(m) >= 4))[:n]
 
 
+JEUX_RAPIDES = ["cartes", "bombe", "syllabaire", "memoire", "mot_ou_pas", "etalonnage"]
+
+
+def ecran_de(jeu_id: str):
+    return {"cartes": EcranCartes, "bombe": EcranBombe, "syllabaire": EcranSyllabaire, "memoire": EcranMemoire,
+            "mot_ou_pas": EcranDecision, "etalonnage": EcranDecision}[jeu_id]
+
+
 class Accueil(Screen):
     BINDINGS = [Binding("q", "app.quit", "Quitter")]
 
@@ -131,7 +139,8 @@ class Accueil(Screen):
     def _options(self) -> list[Option]:
         out = []
         for cle, nom, desc in MENU:
-            t = Text(f"{nom:<20}", style="bold") + Text(desc, style=GRIS)
+            num = f"{JEUX_RAPIDES.index(cle) + 1} " if cle in JEUX_RAPIDES else "  "
+            t = Text(num, style=SOMBRE) + Text(f"{nom:<20}", style="bold") + Text(desc, style=GRIS)
             out.append(Option(t, id=cle))
         return out
 
@@ -166,6 +175,13 @@ class Accueil(Screen):
 
     def on_screen_resume(self) -> None:
         self.rafraichir()
+
+    def on_key(self, ev) -> None:
+        """1 à 6 : lance le jeu tout de suite, avec ses derniers réglages (Entrée ouvre les réglages)."""
+        if ev.character and ev.character in "123456" and int(ev.character) <= len(JEUX_RAPIDES):
+            ev.stop()
+            jeu = REGISTRE[JEUX_RAPIDES[int(ev.character) - 1]]
+            self.app.push_screen(ecran_de(jeu.id)(jeu, dict(self.app.ctx.params(jeu))))
 
     def on_option_list_option_selected(self, ev: OptionList.OptionSelected) -> None:
         cle = ev.option.id
@@ -276,9 +292,7 @@ class Reglages(Screen):
             self.app.pop_screen()
 
     def action_jouer(self) -> None:
-        ecran = {"cartes": EcranCartes, "bombe": EcranBombe, "syllabaire": EcranSyllabaire, "memoire": EcranMemoire,
-                 "mot_ou_pas": EcranDecision, "etalonnage": EcranDecision}[self.jeu.id]
-        self.app.push_screen(ecran(self.jeu, dict(self.params)))
+        self.app.push_screen(ecran_de(self.jeu.id)(self.jeu, dict(self.params)))
 
 
 # ── Socle des parties ───────────────────────────────────────────────────────────────────────────
@@ -755,10 +769,29 @@ class EcranBombe(EcranPartie):
                 with Center():
                     yield Static(id="stimulus")
                 yield Static(id="minuterie")
-                yield Input(id="saisie", placeholder="un mot qui contient la suite — /aide")
+                yield Input(id="saisie", placeholder="un mot qui contient la suite — /d : un mot qui marche")
                 yield Static(id="retour")
                 yield Static(id="detail")
         yield Footer()
+
+    def commande(self, texte: str) -> bool:
+        """/d (ou /c), seul : un mot qui marche pour la suite. Avec un argument, /d reste « domaine »."""
+        if texte.strip().lower().endswith(("/d", "/c")) and " " not in texte.strip():
+            self.query_one("#saisie", Input).value = ""
+            if self.pret and not self.fini:
+                self.en_fond(self.partie.indice, self._indice)
+            return True
+        return super().commande(texte)
+
+    def _indice(self, ind) -> None:
+        t = Text()
+        if ind is None:
+            t.append("aucun mot à proposer pour cette suite", style=GRIS)
+        else:
+            t.append("indice : ", style=GRIS)
+            t.append(ind["mot"], style=f"bold {BLANC}")
+            t.append("   tu le connais" if ind["connu"] else "   noté « vu » : tu le croiseras", style=GRIS)
+        self.maj("retour", t)
 
     def construire(self):
         from lem.games.bombe import PartieBombe
@@ -794,7 +827,7 @@ class EcranBombe(EcranPartie):
         p, inv = self.partie, self.partie.invite
         t = Text("♥ " * p.vies, style=f"bold {BLANC}") + Text("♡ " * max(0, self.params["vies_max"] - p.vies), style=SOMBRE)
         t += Text(f"  {p.score:6.1f} pts", style=BLANC)
-        t += Text(f"   {self.params['mode']} · {filtres_depuis(self.params).resume()}", style=GRIS)
+        t += Text(f"   {self.params['mode']} · sub-{self.params['sub']} · {filtres_depuis(self.params).resume()}", style=GRIS)
         if inv.cible_id is not None and inv.repetitions:
             t += Text(f"   ↻ {inv.repetitions}", style=BLANC)
         t += Text(f"   {inv.n_solutions} sol.", style=SOMBRE)
@@ -832,7 +865,10 @@ class EcranBombe(EcranPartie):
             t += ligne_proximite(r.proximite, mot or "")
         elif not r.valide:
             t.append(r.message, style=GRIS)
-        if r.valide and r.trouvaille and mot:
+        if r.valide and r.aide and mot:
+            t.append(f"{'' if not t.plain else '   '}{mot}", style=f"bold {BLANC}")
+            t.append("  donné par /d : vu, pas trouvé", style=GRIS)
+        elif r.valide and r.trouvaille and mot:
             n, med = r.trouvaille["n"], r.trouvaille["latence_mediane_ms"]
             t.append(f"{'' if not t.plain else '   '}{mot}", style=f"bold {BLANC}")
             t.append("  1ʳᵉ fois" if n <= 1 else f"  {n}ᵉ fois · d'habitude {med / 1000:.1f} s".replace(".", ","),

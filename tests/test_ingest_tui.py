@@ -238,3 +238,20 @@ async def test_memoire_entrainement_invite_image(tmp_path):
         await pilot.press("space")
         assert e.attente_encodage is None and e.partie.encodages
         assert e.partie.tour.forme != premier or e.partie.tour.deja_vu
+
+
+async def test_accueil_touche_chiffre_lance_le_jeu(tmp_path):
+    from lem.cli import main
+    from lem.contexte import Contexte
+    from lem.tui.app import EcranBombe, EcranCartes, LemApp
+
+    chemin = tmp_path / "t.sqlite"
+    main(["--db", str(chemin), "demo", "--sans-jeu"])
+    app = LemApp(Contexte(chemin))
+    async with app.run_test(size=(110, 50)) as pilot:
+        await pilot.pause(1.6)
+        await pilot.press("2")                                  # Bombe, sans passer par les réglages
+        assert isinstance(app.screen, EcranBombe)
+        await pilot.press("escape")
+        await pilot.press("1")
+        assert isinstance(app.screen, EcranCartes)

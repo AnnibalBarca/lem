@@ -45,6 +45,7 @@ from lem.texte import normaliser
 ALPHABET_BONUS = "abcdefghijlmnopqrstuv"
 
 ANCIENS_MODES = {"libre": "standard", "apprentissage": "conscient"}
+SEUIL_CONNU = 0.6            # P(connu) à partir de laquelle /d te donne « un mot que tu connais »
 
 BOMBE = enregistrer(Jeu(
     id="bombe",
@@ -57,7 +58,10 @@ BOMBE = enregistrer(Jeu(
         *PARAMS_FILTRES,
         Param("long_min", "Lettres min", int, 2, "longueur minimale de la suite", 2, 10),
         Param("long_max", "Lettres max", int, 3, "longueur maximale de la suite", 2, 12),
-        Param("solutions_min", "Solutions min", int, 3, "mode libre : mots possibles minimum par suite", 1, 10_000),
+        Param("sub", "Difficulté : moins de N mots", int, 500, "une suite est tirée si moins de N mots la "
+              "contiennent (sub-500 : les invites où l'on sèche) ; 100000 = toutes, même les plus faciles",
+              5, 100_000, alias=("difficulte", "diff")),
+        Param("solutions_min", "Solutions min", int, 3, "mode standard : mots possibles minimum par suite", 1, 10_000),
         Param("vies", "Vies", int, 3, "", 1, 20),
         Param("vies_max", "Vies max", int, 3, "", 1, 20),
         Param("regain", "Regain de vie", str, "alphabet", "aucun | alphabet | mot_rare",
@@ -92,7 +96,8 @@ def trouvailles(con: sqlite3.Connection, entree_id: int) -> dict:
     médian pour le trouver (de l'apparition de la suite à la validation), tes fautes de graphie dessus."""
     lat = [r[0] for r in con.execute(
         """SELECT latence_ms FROM evenement WHERE entree_id = ? AND jeu = 'bombe' AND type = 'reponse'
-           AND correct = 1 AND latence_ms IS NOT NULL""", (entree_id,))]
+           AND correct = 1 AND latence_ms IS NOT NULL AND COALESCE(json_extract(data, '$.aide'), 0) = 0""",
+        (entree_id,))]
     fautes = con.execute("""SELECT COUNT(*) FROM evenement WHERE entree_id = ? AND jeu = 'bombe' AND type = 'reponse'
                             AND trace = 'ortho'""", (entree_id,)).fetchone()[0]
     return {"n": len(lat), "latence_mediane_ms": statistics.median(lat) if lat else None, "fautes": fautes}
@@ -137,6 +142,7 @@ class Retour:
     graphie: Diagnostic | None = None           # faute de graphie identifiée
     forme: str | None = None                    # la forme reconnue (accentuée si la saisie ne l'était pas)
     trouvaille: dict | None = None              # ce que la Bombe sait de toi sur ce mot (cf. trouvailles)
+    aide: bool = False                          # le mot venait de /d : vu, pas trouvé
 
 
 class PartieBombe:
@@ -162,6 +168,9 @@ class PartieBombe:
         self.cibles_vues: set[int] = set()
         self.retours: list[tuple[int, int, int, int]] = []   # (échéance, cible, longueur de suite, retours restants)
         self.facteur_temps = 1.0
+        self.suites = None                       # lem.suites.IndexSuites, à la demande (mode standard sans filtre)
+        self._suites_cle = None
+        self.aides: set[str] = set()             # mots donnés par /d : ne comptent pas comme trouvés
         self._univers()
         self.reconfigurer()
         self.invite: Invite = self.nouvelle_invite()
@@ -239,7 +248,39 @@ class PartieBombe:
         lo, hi = self.params["long_min"], max(self.params["long_min"], self.params["long_max"])
         return self.rng.randint(lo, hi)
 
+    def _sans_filtre(self) -> bool:
+        p = self.params
+        return not (p.get("domaine") or p.get("origine") or p.get("type") or p.get("zipf_min") is not None
+                    or p.get("zipf_max") is not None) and (p.get("etat") or "tous") == "tous"
+
+    def _suite_standard(self) -> Invite | None:
+        """Une suite de 2 ou 3 lettres tirée parmi celles qui ont moins de `sub` mots (au moins `solutions_min`,
+        dont deux en usage), les plus fréquentes plus souvent. None si aucune, ou si le vivier est filtré."""
+        L = tuple(range(max(2, self.params["long_min"]), min(3, self.params["long_max"]) + 1))
+        if not L or self.lex is None or not self._sans_filtre():
+            return None
+        cle = (self.params["sub"], self.params["solutions_min"], L, self._exclus())
+        if self._suites_cle != cle:
+            if self.suites is None or self.suites.exclus != self._exclus():
+                from lem.suites import IndexSuites
+
+                self.suites = IndexSuites(self.lex, self._exclus())
+            liste = self.suites.rares(self.params["sub"], L, minimum=self.params["solutions_min"], attestes=2)
+            cumul, t = [], 0.0
+            for _, n in liste:
+                t += n                           # tirage proportionnel au nombre de mots : surtout 100–499, parfois rare
+                cumul.append(t)
+            self._suites_liste, self._suites_cumul, self._suites_cle = liste, cumul, cle
+        if not self._suites_liste:
+            return None
+        s, n = self.rng.choices(self._suites_liste, cum_weights=self._suites_cumul, k=1)[0]
+        _, k = self.solutions(s)
+        return Invite(s, k=k, n_solutions=n, duree=self._duree())      # n : formes valides, comme « sub-N »
+
     def _invite_libre(self) -> Invite:
+        inv = self._suite_standard()
+        if inv is not None:
+            return inv
         textes = [t for t in self._textes_vivier if t]
         for _ in range(60):
             if not textes:
@@ -253,7 +294,7 @@ class PartieBombe:
             if not LETTRES.fullmatch(s):
                 continue
             n, k = self.solutions(s)
-            if n >= self.params["solutions_min"]:
+            if self.params["solutions_min"] <= n < self.params["sub"]:
                 return Invite(s, k=k, n_solutions=n, duree=self._duree())
         return Invite("e", k=0, n_solutions=0, duree=self._duree())
 
@@ -384,6 +425,9 @@ class PartieBombe:
                 "repetitions_restantes": inv.repetitions, "fsrs": False}
         if cle and cle != texte.strip().lower():
             base["accents_manquants"] = cle
+        aide = bool(cle) and cle in self.aides
+        if aide:
+            base["aide"] = True                  # donné par /d : un mot vu, pas un mot trouvé
         if cle and suite_ok and not ids and cle not in self.utilises and not (frappe and frappe.dictee):
             diag = self._diagnostic(texte)
             if diag:
@@ -405,7 +449,7 @@ class PartieBombe:
         vie = self._regain(cle, z)
         trace_existe = self.con.execute("SELECT 1 FROM trace_etat WHERE entree_id = ? AND trace = 'prod'",
                                         (eid,)).fetchone() is not None
-        retour = Retour(True, "", eid, points=points, vie_gagnee=vie, forme=cle)
+        retour = Retour(True, "", eid, points=points, vie_gagnee=vie, forme=cle, aide=aide)
 
         if inv.cible_id is not None and eid == inv.cible_id:
             retour.cible_trouvee = True
@@ -434,11 +478,45 @@ class PartieBombe:
                                                              reponse=texte, correct=True, latence_ms=latence_ms,
                                                              frappe=frappe or Frappe(), data=data))
             # Sans propagation : on ne tape que des mots qu'on connaît (biais de sélection, cf. memory/migration.py).
-            self.carte.observer(eid, 1.0, poids=0.5, source="bombe:spontane", evenement_id=ev, propager=False)
+            if not aide:                         # un mot donné par /d n'est pas une preuve de vocabulaire actif
+                self.carte.observer(eid, 1.0, poids=0.5, source="bombe:spontane", evenement_id=ev, propager=False)
             retour.revelation = self._apres_echec_cible(texte)
         retour.trouvaille = trouvailles(self.con, eid)
         self.score += retour.points
         return retour
+
+    def indice(self) -> dict | None:
+        """/d : un mot qui contient la suite et que tu peux sortir. D'abord un mot que tu connais (P(connu) ≥ 0,6),
+        le plus long jusqu'à 12 lettres (il rapporte le plus), parmi les formes en usage ; sinon le plus probable. Un mot que tu ne
+        connais pas est noté « vu » au journal (événement `indice`) : il compte comme rencontré, pas comme su.
+        Un mot donné ne l'est qu'une fois. None s'il n'y a rien à proposer."""
+        suite, exclus = self.invite.suite, self._exclus()
+        normes = self.lex.normes_contenant(suite, range(max(2, len(suite)), 24))
+        if len(normes) > 3000:
+            normes = self.rng.sample(normes, 3000)
+        from wordfreq import zipf_frequency
+
+        cands: list[tuple[str, tuple[int, ...], float]] = []
+        for x in normes:
+            for f in self.lex.formes_de_norme(x):
+                if f not in self.utilises and f not in self.aides and f.isalpha():
+                    ids = self.lex.entrees(f, exclus)
+                    if ids:
+                        cands.append((f, ids, zipf_frequency(f, "fr")))
+        if not cands:
+            return None
+        usuels = [c for c in cands if c[2] > 0]          # des formes en usage, pas « becquetassions »
+        cands = usuels or cands
+        tous = list({i for _, ids, _ in cands for i in ids})
+        p = dict(zip(tous, self.carte.p_de(tous)))
+        scores = [(f, max(ids, key=lambda i: p[i]), max(p[i] for i in ids), z) for f, ids, z in cands]
+        connus = [s for s in scores if s[2] >= SEUIL_CONNU]
+        mot, eid, pm, _ = (max(connus, key=lambda s: (min(len(s[0]), 12), s[3])) if connus
+                           else max(scores, key=lambda s: (s[2], s[3])))
+        self.aides.add(mot)
+        ecrire(self.con, self.session_id, Evenement("bombe", "indice", entree_id=eid, data={
+            "suite": suite, "mot": mot, "p": round(pm, 3), "connu": pm >= SEUIL_CONNU, "vu": pm < SEUIL_CONNU}))
+        return {"mot": mot, "entree_id": eid, "p": pm, "connu": pm >= SEUIL_CONNU}
 
     def exploser(self) -> Retour:
         """Le temps est écoulé : une vie en moins."""

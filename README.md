@@ -25,7 +25,7 @@ ta mémoire.
 | Jeu | Ce qu'il fait | Ce qu'il mesure |
 |---|---|---|
 | **Cartes** | mot → sens (texte libre ou synonymes), sens → mot (Tab = une lettre), duels de confusables ; chaque mot nouveau est d'abord **sondé** | précision, type d'erreur, mot réellement défini, lettres nécessaires |
-| **Bombe** | façon JKLM : une suite de lettres, un mot. Modes libre / apprentissage / confusables, répétition intelligente, extension vers la cible | vocabulaire actif spontané, disponibilité par suite, confusions |
+| **Bombe** | façon JKLM : une suite de lettres, un mot. Par défaut : mode standard, suites à moins de 500 mots (`/sub`), bombe de 10 à 15 s, ni noms ni locutions ; `/d` (ou `/c`) donne un mot qui marche (un mot que tu connais, sinon noté « vu ») ; modes conscient (le tuteur) et confusables | vocabulaire actif spontané, disponibilité par suite, temps habituel par mot, confusions |
 | **Syllabaire** | l'entraînement de la Bombe : les suites rares (« sub-50 ») apprises par cœur, avec leur ancre et leur répétition espacée | survie (un premier mot, vite), étendue (combien de ses mots tu as) |
 | **Mémoire verbale** | façon Human Benchmark. *Entraînement* : fidèle au test, avec une invite « image ? » qui s'efface quand ton record monte. *Élucubrations* : les mots les plus étranges du français, avec leurs définitions | record, fausses alertes (familiarité) contre oublis (encodage), temps d'encodage |
 | **Mot ou pas mot** | décision lexicale chronométrée contre des pseudo-mots | temps d'accès lexical |
@@ -64,6 +64,10 @@ de bge-m3 et Whisper). `/juge haiku`, `/juge sonnet`, `/juge qwen3:8b`, `/juge n
 
 **Six mémoires par mot.** Reconnu, défini, retrouvé, écrit juste, trouvé vite, encodé : chaque jeu en
 mesure une partie, et l'Atlas montre où ça manque (`lem mot thuriféraire`, ou `/mot` en jeu).
+
+**Des mots, rien que des mots.** Ni expressions ni entrées de plusieurs mots (ils sont retirés de la base :
+`lem nettoyer`), ni noms propres, sigles ou mots à majuscule dans les jeux ; les mots à trait d'union restent
+des mots. Sur l'écran d'accueil, **1 à 6 lance le jeu** avec ses derniers réglages ; Entrée ouvre les réglages.
 
 Dans tous les jeux : `/aide`, `/mot acronyme`, `/domaine science,droit`, `/etat flous`, `/vies 5`, `/mode confusables`, `/params`…
 Les réglages sont enregistrés dans la base.

@@ -109,6 +109,8 @@ def selectionner(con: sqlite3.Connection, f: Filtres, limite: int | None = None,
         args += dids
     if not f.locutions and "expression" not in f.types:
         where.append("e.type != 'expression' AND instr(e.forme, ' ') = 0")
+    if "nom_propre" not in f.types:
+        where.append("e.forme NOT GLOB '[A-Z]*'")      # majuscule initiale : nom, gentilé, langue — pas un mot du jeu
     for col, vals in (("e.origine", f.origines), ("e.type", f.types)):
         if vals:
             where.append(f"{col} IN ({', '.join('?' * len(vals))})")

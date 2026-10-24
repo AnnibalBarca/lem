@@ -387,3 +387,49 @@ def test_elucubrations_plafonnent_les_noms_propres(con, rng):
     tires = [m.suivant() for _ in range(40)]
     propres = {r["id"] for r in m.propres}
     assert not any(t.entree_id in propres for t in tires if t.premiere_fois)
+
+
+def test_bombe_difficulte_sub(con, carte, rng):
+    """Mode standard : jamais une suite à `sub` mots ou plus (sub-500 par défaut)."""
+    from lem.lexique import Lexique
+
+    lex = Lexique(con)
+    b = PartieBombe(con, params("bombe", mode="standard", sub=40, solutions_min=1), carte, rng=rng, lexique=lex)
+    for _ in range(30):
+        inv = b.nouvelle_invite()
+        assert 1 <= inv.n_solutions < 40, (inv.suite, inv.n_solutions)
+    assert params("bombe")["sub"] == 500 and params("bombe")["mode"] == "standard"
+    assert params("bombe")["temps_min"] == 10.0
+
+
+def test_bombe_indice_d(con, carte, rng):
+    """/d : un mot valide qui contient la suite, connu de préférence ; un mot inconnu est noté « vu »."""
+    from lem.lexique import Lexique
+
+    b = PartieBombe(con, params("bombe", mode="standard", solutions_min=1), carte, rng=rng, lexique=Lexique(con))
+    b.invite.suite = "on"
+    ind = b.indice()
+    assert ind and "on" in normaliser(ind["mot"]) and ind["mot"] not in b.utilises
+    ev = con.execute("SELECT data FROM evenement WHERE jeu = 'bombe' AND type = 'indice'").fetchone()[0]
+    assert '"mot":"%s"' % ind["mot"] in ev
+    autre = b.indice()
+    assert autre is None or autre["mot"] != ind["mot"]           # jamais deux fois le même
+    # Le mot donné, tapé ensuite : valide, mais ni preuve de vocabulaire actif ni « trouvé » au profil.
+    n_obs = con.execute("SELECT COUNT(*) FROM observation").fetchone()[0]
+    b.invite.suite = normaliser(ind["mot"])[:2]
+    r = b.repondre(ind["mot"], 900)
+    assert r.valide and con.execute("SELECT COUNT(*) FROM observation").fetchone()[0] == n_obs
+    assert r.trouvaille["n"] == 0
+
+
+def test_pas_de_majuscule_initiale(con):
+    """Les mots à majuscule (noms, gentilés, langues) ne sortent pas dans les jeux, sauf type nom_propre demandé."""
+    from lem.db import upsert_entree
+    from lem.games.base import filtres_depuis
+    from lem.games.pool import selectionner
+
+    upsert_entree(con, "Saint-Albanaise", "adj", type="mot")
+    con.commit()
+    formes = {r["forme"] for r in selectionner(con, filtres_depuis({}))}
+    assert "Saint-Albanaise" not in formes and "acronyme" in formes
+    assert "Saint-Albanaise" in {r["forme"] for r in selectionner(con, filtres_depuis({"type": ["mot", "nom_propre"]}))}
