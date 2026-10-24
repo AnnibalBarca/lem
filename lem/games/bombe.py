@@ -46,6 +46,7 @@ ALPHABET_BONUS = "abcdefghijlmnopqrstuv"
 
 ANCIENS_MODES = {"libre": "standard", "apprentissage": "conscient"}
 SEUIL_CONNU = 0.6            # P(connu) à partir de laquelle /d te donne « un mot que tu connais »
+SEUIL_CONNU_PRIOR = 0.45     # … et a priori de fréquence à partir duquel un mot compte connu sans preuve sur lui
 
 BOMBE = enregistrer(Jeu(
     id="bombe",
@@ -509,6 +510,10 @@ class PartieBombe:
         cands = usuels or cands
         tous = list({i for _, ids, _ in cands for i in ids})
         p = dict(zip(tous, self.carte.p_de(tous)))
+        # « Connu » demande plus qu'une probabilité qui monte avec tes réponses sur d'autres mots : soit l'a priori
+        # de fréquence suffit (mot courant), soit tu as une preuve sur ce mot-là (la carte est parfois généreuse).
+        solide = {i: (pr >= SEUIL_CONNU_PRIOR or n_obs > 0) for i, pr, n_obs in self._priors(tous)}
+        p = {i: (v if solide.get(i, False) else min(v, SEUIL_CONNU - 0.01)) for i, v in p.items()}
         scores = [(f, max(ids, key=lambda i: p[i]), max(p[i] for i in ids), z) for f, ids, z in cands]
         connus = [s for s in scores if s[2] >= SEUIL_CONNU]
         mot, eid, pm, _ = (max(connus, key=lambda s: (min(len(s[0]), 12), s[3])) if connus
@@ -517,6 +522,12 @@ class PartieBombe:
         ecrire(self.con, self.session_id, Evenement("bombe", "indice", entree_id=eid, data={
             "suite": suite, "mot": mot, "p": round(pm, 3), "connu": pm >= SEUIL_CONNU, "vu": pm < SEUIL_CONNU}))
         return {"mot": mot, "entree_id": eid, "p": pm, "connu": pm >= SEUIL_CONNU}
+
+    def _priors(self, ids: list[int]):
+        for a in range(0, len(ids), 900):
+            lot = ids[a:a + 900]
+            yield from self.con.execute(
+                f"SELECT entree_id, p_prior, n_obs FROM connaissance WHERE entree_id IN ({', '.join('?' * len(lot))})", lot)
 
     def exploser(self) -> Retour:
         """Le temps est écoulé : une vie en moins."""

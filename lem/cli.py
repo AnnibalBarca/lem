@@ -164,6 +164,15 @@ def cmd_nettoyer(args) -> None:
     loc = ingest.retirer_locutions(ctx.con)
     print(f"locutions retirées de la base : {loc['supprimees']} · gardées parce que le journal les cite : "
           f"{loc['gardees_car_citees']}")
+    if loc["supprimees"]:
+        from lem.memory.knowledge import estimation_connus, recalibrer_prior
+
+        # Le lexique a changé de taille : la cible « adulte cultivé » se recompte sur les mots qui restent.
+        p = recalibrer_prior(ctx.con)
+        if p:
+            connus, prior = estimation_connus(ctx.con)
+            print(f"a priori recalibré (seuil Zipf {p.seuil:.2f}, ≈ {prior:,.0f} lemmes pour l'adulte moyen) ; "
+                  f"carte rejouée : ≈ {connus:,.0f} lemmes connus estimés".replace(",", " "))
     b = ingest.nettoyer_sens(ctx.con)
     print(f"définitions nettoyées : {b['nettoyes']} · sens vides supprimés : {b['supprimes']} · "
           f"vidés mais gardés (cités par le journal) : {b['vides_gardes']}")

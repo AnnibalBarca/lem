@@ -77,12 +77,22 @@ class Contexte:
         set_reglage(self.con, f"params:{jeu.id}", params)
         self.con.commit()
 
+    def _estimation(self) -> tuple[float, float]:
+        """Lemmes connus estimés et a priori, recalculés seulement si la carte a bougé (0,6 s sur la vraie base)."""
+        from lem.memory.knowledge import estimation_connus
+
+        v = self.carte._version
+        if getattr(self, "_estim", None) is None or self._estim[0] != v:
+            self._estim = (v, estimation_connus(self.con))
+        return self._estim[1]
+
     def stats(self) -> dict:
         c = self.con
         return {
             "entrees": c.execute("SELECT COUNT(*) FROM entree").fetchone()[0],
             "sens": c.execute("SELECT COUNT(*) FROM sens").fetchone()[0],
-            "connus_estimes": round(c.execute("SELECT COALESCE(SUM(p_connu), 0) FROM connaissance").fetchone()[0]),
+            "connus_estimes": round(self._estimation()[0]),
+            "connus_adulte": round(self._estimation()[1]),
             "dues": c.execute("SELECT COUNT(*) FROM trace_etat WHERE due <= ?", (iso(now()),)).fetchone()[0],
             "a_noter": c.execute(
                 """SELECT COUNT(*) FROM evenement ev WHERE ev.type = 'reponse' AND ev.trace = 'recep'

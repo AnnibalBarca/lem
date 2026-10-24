@@ -339,3 +339,19 @@ def test_lem_mots(tmp_path, capsys):
     assert "1 mots vus" in sortie and "acronyme" in sortie and "B" in sortie
     main(["--db", str(chemin), "mots", "--csv"])
     assert capsys.readouterr().out.splitlines()[1].startswith("acronyme,bombe,1,")
+
+
+def test_estimation_connus_et_recalibrage(con):
+    """Le total affiché compte des lemmes ; après un changement de lexique, l'a priori se recalibre sur les mots restants."""
+    from lem import ingest
+    from lem.memory.knowledge import estimation_connus, recalibrer_prior
+
+    connus, prior = estimation_connus(con)
+    assert 0 < prior and connus > 0
+    n_lemmes = con.execute("SELECT COUNT(DISTINCT lower(forme)) FROM entree WHERE type NOT IN ('nom_propre', 'sigle')").fetchone()[0]
+    assert prior <= n_lemmes
+    ingest.retirer_locutions(con)                        # le lexique change de taille
+    p = recalibrer_prior(con)
+    assert p is not None
+    _, prior2 = estimation_connus(con)
+    assert abs(prior2 - prior) < 0.1 * max(prior, 1)     # la cible (clamp compris) est retrouvée sur les mots restants

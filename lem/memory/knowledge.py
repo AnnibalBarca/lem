@@ -48,6 +48,31 @@ class ParamsPrior:
 VERSION_PRIOR = 2                    # 2 : une graphie compte une fois ; sigles et composés de Zipf nul exclus
 
 
+def estimation_connus(con: sqlite3.Connection) -> tuple[float, float]:
+    """(lemmes connus estimés, lemmes connus de l'adulte moyen) sur la base du calibrage : une graphie compte une
+    fois, ni noms propres, ni sigles, ni composés de fréquence inconnue. L'ancien total sommait les ≈ 450 000
+    entrées (formes d'un même mot, dérivés) : 114 000 « connues » là où un adulte cultivé en connaît 45 000."""
+    r = con.execute(
+        """WITH base AS (SELECT id, lower(forme) f FROM entree WHERE langue = 'fr' AND type NOT IN ('nom_propre', 'sigle')
+                           AND NOT (type IN ('compose', 'expression') AND COALESCE(zipf, 0) = 0)),
+                n AS (SELECT f, COUNT(*) c FROM base GROUP BY f)
+           SELECT COALESCE(SUM(k.p_connu / n.c), 0), COALESCE(SUM(k.p_prior / n.c), 0)
+           FROM base JOIN n USING (f) JOIN connaissance k ON k.entree_id = base.id""").fetchone()
+    return float(r[0]), float(r[1])
+
+
+def recalibrer_prior(con: sqlite3.Connection) -> ParamsPrior | None:
+    """Recalibre l'a priori sur le lexique TEL QU'IL EST (même cible et même pente que l'enregistré), puis rejoue
+    la carte. À faire quand le lexique change de taille (lem nettoyer, nouvelle ingestion)."""
+    brut = get_reglage(con, "prior", None)
+    if not brut or not con.execute("SELECT 1 FROM entree LIMIT 1").fetchone():
+        return None
+    garde = {k: v for k, v in brut.items() if k in ("cible_connus", "pente", "zipf_absent")}
+    p = calibrer(con, ParamsPrior(**garde))
+    CarteConnaissance(con).rejouer()
+    return p
+
+
 def mettre_a_jour_prior(con: sqlite3.Connection) -> bool:
     """Recalibre l'a priori si la base a été calibrée par une méthode plus ancienne (même cible, même pente),
     puis rejoue la carte. Renvoie True si quelque chose a changé."""

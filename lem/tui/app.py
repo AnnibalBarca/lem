@@ -166,7 +166,7 @@ class Accueil(Screen):
         t.append(f"{s['entrees']:,}".replace(",", " "), style=BLANC)
         t.append(" entrées · ", style=GRIS)
         t.append(f"~{s['connus_estimes']:,}".replace(",", " "), style=BLANC)
-        t.append(" connues (estimé) · ", style=GRIS)
+        t.append(f" connues (estimé ; adulte moyen {s['connus_adulte']:,}) · ".replace(",", " "), style=GRIS)
         t.append(str(s["dues"]), style=BLANC)
         t.append(" à réviser · ", style=GRIS)
         t.append(str(s["a_noter"]), style=BLANC)
