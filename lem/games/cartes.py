@@ -30,6 +30,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from datetime import timedelta
 
+from lem import utilite
 from lem.confusables import IndexFormel, grappe
 from lem.db import iso, now
 from lem.games.bombe import TYPES_HORS_JEU
@@ -182,9 +183,11 @@ class PartieCartes:
         if not p.get("locutions"):
             self._hors_jeu |= {r[0] for r in self.con.execute(
                 "SELECT id FROM entree WHERE type = 'expression' OR instr(forme, ' ') > 0")}
-        vivier = [r for r in vivier if r["type"] not in exclus]
+        self._ecartes = utilite.ecartes(self.con)           # words hidden with the « useless » key: gone for good
+        vivier = [r for r in vivier if r["type"] not in exclus and r["id"] not in self._ecartes]
         from lem.games.pool import secondaires
 
+        self._hors_jeu |= self._ecartes
         self._hors_jeu |= secondaires(self.con)            # feminine / plural entries, spelling variants: never due
 
         # Révisions : dues maintenant (consolider : aussi les fragiles des deux jours à venir).
@@ -247,8 +250,14 @@ class PartieCartes:
                                     exploration=plan_mod.EXPLORATION)
             return v * (1 + 0.5 * reveles.get(r["id"], 0))
 
+        # Utility: a word built from words you know (anti-cartésien) is worth less than an opaque one
+        # (belle-de-jour). Computed only for the best candidates, new words only: never for revisions.
         cands.sort(key=valeur, reverse=True)
-        return self._diversifier(cands, valeur, n)
+        tete = cands[: 8 * n]
+        fac = utilite.facteurs(self.con, tete, self.magasin_entrees)
+        utile = lambda r: valeur(r) * fac.get(r["id"], 1.0)      # noqa: E731
+        tete.sort(key=utile, reverse=True)
+        return self._diversifier(tete, utile, n)
 
     def _diversifier(self, cands, valeur, n: int) -> list[int]:
         """Choix glouton : chaque mot retenu rend moins probables, par `diversite`, ceux qui partagent un morphème
@@ -327,6 +336,8 @@ class PartieCartes:
             t = self.plan.prochaine(now().timestamp())
             if t is None:
                 return None
+            if t.entree_id in self._hors_jeu:               # hidden since the plan was built
+                continue
             it = self._item_de(t)
             if it is not None:
                 break
@@ -337,6 +348,12 @@ class PartieCartes:
                                                     trace=None, data={"exercice": it.exercice, "nouveau": it.nouveau,
                                                                       "role": it.role}))
         return it
+
+    def ecarter(self, entree_id: int) -> None:
+        """The « useless » key: the word never comes back, in any card."""
+        utilite.ecarter(self.con, entree_id)
+        self._hors_jeu.add(entree_id)
+        self._ecartes.add(entree_id)
 
     def indice(self, it: Item) -> str:
         """Révèle une lettre de plus du mot (exercice prod)."""

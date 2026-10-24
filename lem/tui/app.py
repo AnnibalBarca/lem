@@ -487,6 +487,7 @@ class EcranPartie(Screen):
 
 class EcranCartes(EcranPartie):
     BINDINGS = [Binding("escape", "quitter", "Menu"), Binding("tab", "indice", "Indice (lettre)", priority=True),
+                Binding("ctrl+x", "inutile", "Inutile", priority=True),
                 Binding("up", "choix(-1)", "Choix", show=False, priority=True),
                 Binding("down", "choix(1)", "Choix", show=False, priority=True)]
     AVANCE_AUTO = 0.8          # secondes de ✓ à l'écran avant la carte suivante, quand le mot est juste
@@ -584,12 +585,28 @@ class EcranCartes(EcranPartie):
             self.choix = (self.choix + pas) % len(self.item.options)
             self.maj("stimulus", self._options())
 
+    def action_inutile(self) -> None:
+        """Ctrl+X (or /inutile): the word on screen is useless to me. It is hidden for good and the game moves on."""
+        if not self.pret or self.item is None or self.partie is None:
+            return
+        it = self.item
+        self.partie.ecarter(it.entree_id)
+        self.app.notify(f"« {it.forme} » écarté : il ne reviendra plus", timeout=2)
+        if self.resultat is None:
+            self.suivant()
+        else:
+            self._avancer(None)
+
     def action_indice(self) -> None:
         if self.pret and self.item and self.item.exercice == "prod" and self.resultat is None:
             self.maj("retour", Text("indice : ", style=GRIS) + Text(self.partie.indice(self.item), style=f"bold {BLANC}"))
 
     def on_input_submitted(self, ev: Input.Submitted) -> None:
         texte = ev.value
+        if texte.strip("/ ").lower() == "inutile":
+            ev.input.value = ""
+            self.action_inutile()
+            return
         if self.commande(texte) or not self.pret or self.item is None:
             return
         ev.input.value = ""

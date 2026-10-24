@@ -180,6 +180,13 @@ CREATE TABLE IF NOT EXISTS observation (
 );
 CREATE INDEX IF NOT EXISTS idx_observation_ts ON observation(ts, id);
 
+-- Mots écartés d'une touche dans les Cartes (« inutile ») : ils ne reviennent plus. État de l'utilisateur,
+-- pas un état dérivé : `lem rebuild` n'y touche pas.
+CREATE TABLE IF NOT EXISTS mot_ecarte (
+    entree_id INTEGER PRIMARY KEY REFERENCES entree(id),
+    ts        TEXT NOT NULL
+);
+
 -- Mnémotechnie : images mentales (écrites ou dictées), dessins, étymologie personnelle.
 CREATE TABLE IF NOT EXISTS mnemo (
     id        INTEGER PRIMARY KEY,
