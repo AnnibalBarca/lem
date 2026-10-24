@@ -130,3 +130,35 @@ def test_magasin_compact_sur_fichier(tmp_path, monkeypatch):
     assert [x.id for x in m.voisins(v, k=5)] == [int(m.ids[i]) for i in attendu]
     m2 = Magasin(con, "sens", emb.nom)                            # second chargement : depuis le cache
     assert m2.sims(v, [int(m.ids[0])]) == m.sims(v, [int(m.ids[0])]) and not len(exact)
+
+
+def test_retirer_locutions():
+    from lem.journal import Evenement, ecrire
+
+    con = connect(":memory:")
+    ingest.demo(con)
+    avant = con.execute("SELECT COUNT(*) FROM entree").fetchone()[0]
+    sages = con.execute("SELECT id FROM entree WHERE forme LIKE 'les sages%'").fetchone()[0]
+    assert ingest.retirer_locutions(con) == {"supprimees": 1, "gardees_car_citees": 0}
+    assert con.execute("SELECT COUNT(*) FROM entree").fetchone()[0] == avant - 1
+    assert not con.execute("SELECT 1 FROM sens WHERE entree_id = ?", (sages,)).fetchone()
+    assert con.execute("SELECT 1 FROM entree WHERE forme = 'ville-champignon'").fetchone()     # le trait d'union reste
+    con2 = connect(":memory:")
+    ingest.demo(con2)
+    sages = con2.execute("SELECT id FROM entree WHERE forme LIKE 'les sages%'").fetchone()[0]
+    ecrire(con2, None, Evenement("cartes", "reponse", entree_id=sages, trace="recep", reponse="x"))
+    assert ingest.retirer_locutions(con2) == {"supprimees": 0, "gardees_car_citees": 1}        # le journal la cite
+
+
+def test_wiktionnaire_ignore_les_locutions(tmp_path):
+    import json
+
+    f = tmp_path / "fr.jsonl"
+    f.write_text("\n".join(json.dumps(x, ensure_ascii=False) for x in [
+        {"word": "pomme de terre", "lang_code": "fr", "pos": "noun", "senses": [{"glosses": ["Tubercule."]}]},
+        {"word": "tubercule", "lang_code": "fr", "pos": "noun", "senses": [{"glosses": ["Renflement."]}]},
+        {"word": "casser sa pipe", "lang_code": "fr", "pos": "phrase", "senses": [{"glosses": ["Mourir."]}]}]),
+        encoding="utf-8")
+    con = connect(":memory:")
+    assert ingest.wiktionnaire(con, f) == 1
+    assert [r[0] for r in con.execute("SELECT forme FROM entree")] == ["tubercule"]

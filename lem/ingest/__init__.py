@@ -213,6 +213,30 @@ def nettoyer_definition(texte: str) -> str | None:
     return t if t.endswith((".", "!", "?", "»", ")")) else t + "."
 
 
+def retirer_locutions(con: sqlite3.Connection, lot: int = 2000) -> dict[str, int]:
+    """Supprime de la base les entrées de plusieurs mots (« pomme de terre », « au fil de l'eau ») et les
+    expressions : lem travaille sur des mots. Sont gardées, sans être jouées (les filtres les écartent), celles
+    que le journal, une trace, une observation ou une image mentale cite : rien de ce que tu as joué ne
+    disparaît. Supprime avec elles leurs sens, formes, relations, vecteurs et leur ligne de la carte."""
+    cites: set[int] = set()
+    for sql in ("SELECT DISTINCT entree_id FROM evenement WHERE entree_id IS NOT NULL",
+                "SELECT DISTINCT entree_id FROM observation", "SELECT DISTINCT entree_id FROM trace_etat",
+                "SELECT DISTINCT entree_id FROM mnemo"):
+        cites |= {r[0] for r in con.execute(sql)}
+    ids = [r[0] for r in con.execute("SELECT id FROM entree WHERE type = 'expression' OR instr(forme, ' ') > 0")]
+    a_supprimer = [i for i in ids if i not in cites]
+    for k in range(0, len(a_supprimer), lot):
+        bloc = a_supprimer[k:k + lot]
+        marques = ", ".join("?" * len(bloc))
+        con.execute(f"DELETE FROM embedding WHERE objet = 'sens' AND objet_id IN "
+                    f"(SELECT id FROM sens WHERE entree_id IN ({marques}))", bloc)
+        con.execute(f"DELETE FROM embedding WHERE objet = 'entree' AND objet_id IN ({marques})", bloc)
+        con.execute(f"DELETE FROM connaissance WHERE entree_id IN ({marques})", bloc)
+        con.execute(f"DELETE FROM entree WHERE id IN ({marques})", bloc)       # cascade : sens, formes, relations
+        con.commit()
+    return {"supprimees": len(a_supprimer), "gardees_car_citees": len(ids) - len(a_supprimer)}
+
+
 def nettoyer_sens(con: sqlite3.Connection) -> dict[str, int]:
     """Applique `nettoyer_definition` à une base déjà ingérée. Les sens vides sont supprimés, sauf s'ils sont
     cités par le journal (définition vidée : les jeux les ignorent). Les sens réécrits perdent leur vecteur,
@@ -301,6 +325,8 @@ def wiktionnaire(con: sqlite3.Connection, path: str | Path, progression: Progres
             continue
         pos = POS_WIKT.get(e.get("pos", ""), e.get("pos", ""))
         mot = e["word"]
+        if " " in mot.strip() or pos == "expr":       # des mots, pas des locutions (ni dans le jeu, ni dans la base)
+            continue
         sens = []
         for s in e.get("senses", []):
             lemme = _forme_de(e, s)
@@ -413,6 +439,8 @@ def grammalecte(con: sqlite3.Connection, path: str | Path, progression: Progress
         cible = con.execute("SELECT id FROM entree WHERE forme = ? AND langue = 'fr' AND pos = ?", (lemme, pos)).fetchone() \
             or con.execute("SELECT id FROM entree WHERE forme = ? AND langue = 'fr' AND type NOT IN ('nom_propre', 'sigle')",
                            (lemme,)).fetchone()
+        if not cible and " " in lemme:
+            continue
         eid = cible[0] if cible else upsert_entree(
             con, lemme, pos, type="compose" if re.search(r"[ \-]", lemme) else "mot")
         ajouter_formes(con, eid, [f])

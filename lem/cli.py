@@ -159,7 +159,11 @@ def cmd_noter(args) -> None:
 def cmd_nettoyer(args) -> None:
     from lem import ingest
 
-    b = ingest.nettoyer_sens(_ctx(args).con)
+    ctx = _ctx(args)
+    loc = ingest.retirer_locutions(ctx.con)
+    print(f"locutions retirées de la base : {loc['supprimees']} · gardées parce que le journal les cite : "
+          f"{loc['gardees_car_citees']}")
+    b = ingest.nettoyer_sens(ctx.con)
     print(f"définitions nettoyées : {b['nettoyes']} · sens vides supprimés : {b['supprimes']} · "
           f"vidés mais gardés (cités par le journal) : {b['vides_gardes']}")
     if b["nettoyes"]:
@@ -333,7 +337,7 @@ def main(argv: list[str] | None = None) -> None:
     n.add_argument("--limite", type=int, default=500)
     n.add_argument("--modele", default=argparse.SUPPRESS, help="sonnet | haiku | opus")
     n.set_defaults(f=cmd_noter)
-    sp.add_parser("nettoyer", help="retire les gabarits « Définition manquante… » d'une base déjà ingérée").set_defaults(f=cmd_nettoyer)
+    sp.add_parser("nettoyer", help="retire les locutions et les gabarits « Définition manquante… » d'une base déjà ingérée").set_defaults(f=cmd_nettoyer)
     sp.add_parser("rebuild").set_defaults(f=cmd_rebuild)
     it = sp.add_parser("interets", help="poids par domaine pour le choix des mots nouveaux : science=2 droit=0.5")
     it.add_argument("poids", nargs="*")

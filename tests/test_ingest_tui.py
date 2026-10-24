@@ -37,7 +37,7 @@ def test_wiktionnaire_jsonl(tmp_path):
     ]
     f.write_text("\n".join(json.dumps(x, ensure_ascii=False) for x in lignes), encoding="utf-8")
     con = connect(":memory:")
-    assert ingest.wiktionnaire(con, f) == 3
+    assert ingest.wiktionnaire(con, f) == 2                      # « les sages de la rue Montpensier » : une locution, écartée
     a = con.execute("SELECT * FROM entree WHERE forme = 'acronyme'").fetchone()
     assert a["origine"] == "grec"
     morph = {r[0] for r in con.execute("SELECT m.forme FROM morpheme m JOIN entree_morpheme em ON em.morpheme_id = m.id")}
@@ -47,7 +47,7 @@ def test_wiktionnaire_jsonl(tmp_path):
     assert ("linguistique", "langage") in {tuple(r) for r in dom}
     assert con.execute("SELECT definition FROM sens WHERE entree_id = ?", (a["id"],)).fetchone()[0].startswith("Sigle")
     assert con.execute("SELECT COUNT(*) FROM relation WHERE type = 'synonyme'").fetchone()[0] == 1
-    assert con.execute("SELECT type FROM entree WHERE forme LIKE 'les sages%'").fetchone()[0] == "expression"
+    assert con.execute("SELECT COUNT(*) FROM entree WHERE forme LIKE 'les sages%'").fetchone()[0] == 0
     assert con.execute("SELECT origine FROM entree WHERE forme = 'sigle'").fetchone()[0] == "latin"
 
 
