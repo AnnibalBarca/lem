@@ -475,3 +475,21 @@ def test_diversite_des_mots_nouveaux(con, carte, rng):
             "SELECT morpheme_id FROM entree_morpheme WHERE entree_id = ?", (e,)))
         if d:
             assert max(familles.values(), default=0) <= max(3, len(ids) // 3)
+
+
+def test_recherche_par_suite_et_par_definition(con, emb, magasins):
+    from lem.lexique import Lexique
+    from lem.recherche import est_une_suite, par_definition, par_suite
+
+    lex = Lexique(con)
+    assert est_une_suite("ruv") and est_une_suite("-nyme".lstrip("-")) and not est_une_suite("petit oiseau")
+    mots = par_suite(con, lex, "min")
+    formes = [t.forme for t in mots]
+    assert "éminent" in formes and all("min" in normaliser(f) for f in formes)
+    assert all(t.definition for t in mots) and mots == sorted(mots, key=lambda t: (-t.zipf, len(t.forme), t.forme))
+    assert not any(t.forme[0].isupper() for t in mots)                    # pas de noms propres
+    assert len({t.lemme.lower() for t in mots}) == len(mots)             # un mot par lemme
+    ms, _ = magasins
+    trouves = par_definition(con, lex, emb, ms, "sigle qui se prononce comme un mot")
+    assert trouves and "acronyme" in {t.forme for t in trouves[:5]}
+    assert par_definition(con, lex, None, None, "n'importe quoi") == []     # sans Ollama : rien, sans erreur

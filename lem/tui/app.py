@@ -769,7 +769,7 @@ class EcranBombe(EcranPartie):
                 with Center():
                     yield Static(id="stimulus")
                 yield Static(id="minuterie")
-                yield Input(id="saisie", placeholder="un mot qui contient la suite — /d : un mot qui marche")
+                yield Input(id="saisie", placeholder="un mot qui contient la suite — /d : un mot qui marche · /d ruv : tous les mots en RUV")
                 yield Static(id="retour")
                 yield Static(id="detail")
         yield Footer()
@@ -781,7 +781,61 @@ class EcranBombe(EcranPartie):
             if self.pret and not self.fini:
                 self.en_fond(self.partie.indice, self._indice)
             return True
+        m = re.match(r"^/(?:d|c|chercher)\s+(.+)$", texte.strip(), re.I)
+        if m:
+            arg = m.group(1).strip()
+            from lem.games.pool import domaines_disponibles
+
+            if arg.lower().split(",")[0].strip() in {n for n, _ in domaines_disponibles(self.ctx.con)}:
+                return super().commande(texte)               # « /d science » reste le filtre de domaine
+            self.query_one("#saisie", Input).value = ""
+            self._rechercher(arg)
+            return True
         return super().commande(texte)
+
+    def _rechercher(self, arg: str) -> None:
+        """/d ruv : les mots qui contiennent la suite, avec leur définition ; /d petit oiseau chanteur : les mots
+        dont la définition y ressemble. Même commande une seconde fois : la suite de la liste. Marche pendant la
+        partie (la bombe continue) et après."""
+        if not self.pret:
+            return
+        if arg == getattr(self, "_rech_arg", None):
+            self._rech_page += 1
+        else:
+            self._rech_arg, self._rech_page = arg, 0
+
+        def calcul():
+            from lem import recherche as R
+
+            exclus = () if self.params.get("noms_propres") else R.TYPES_HORS_JEU
+            if R.est_une_suite(arg):
+                return "suite", R.par_suite(self.ctx.con, self.ctx.lexique, arg, exclus=exclus, carte=self.ctx.carte)
+            return "definition", R.par_definition(self.ctx.con, self.ctx.lexique, self.ctx.embedder,
+                                                  self.ctx.magasin_sens, arg, exclus=exclus, carte=self.ctx.carte)
+        self.en_fond(calcul, lambda r: self._montrer_recherche(arg, *r))
+
+    def _montrer_recherche(self, arg: str, mode: str, trouves: list) -> None:
+        par_page = 10
+        t = Text()
+        if not trouves:
+            t.append("aucun mot" if mode == "suite" else
+                     "rien trouvé (le dictionnaire inversé a besoin d'Ollama et de bge-m3)", style=GRIS)
+            self.maj("retour", t)
+            return
+        debut = (self._rech_page * par_page) % len(trouves)
+        page = trouves[debut:debut + par_page]
+        t.append(f"« {arg} » : {len(trouves)} mots (un par lemme ; +N : ses autres formes)" if mode == "suite" else f"proches de « {arg} »", style=GRIS)
+        t.append(f"   {debut + 1}–{debut + len(page)}   (même commande : la suite)\n", style=SOMBRE)
+        for x in page:
+            t.append("● " if (x.p or 0) >= 0.6 else "  ", style=BLANC if (x.p or 0) >= 0.6 else SOMBRE)
+            t.append(x.forme, style=f"bold {BLANC}")
+            if x.lemme.lower() != x.forme:
+                t.append(f" ({x.lemme})", style=GRIS)
+            if x.autres_formes:
+                t.append(f" +{x.autres_formes}", style=SOMBRE)
+            d = " ".join(x.definition.split())
+            t.append("  " + (d if len(d) <= 78 else d[:77] + "…") + "\n", style=GRIS)
+        self.maj("retour", t)
 
     def _indice(self, ind) -> None:
         t = Text()
@@ -900,6 +954,10 @@ class EcranBombe(EcranPartie):
     def on_input_submitted(self, ev: Input.Submitted) -> None:
         texte = ev.value.strip()
         if self.fini:
+            if texte.startswith("/"):                  # /d ruv, /aide… marchent aussi une fois la partie finie
+                if self.pret:
+                    self.commande(texte)
+                return
             if texte.lower() in {"", "r", "rejouer"} and self.pret:
                 ev.input.value = ""
                 self.maj("stimulus", Text("chargement…", style=SOMBRE))
@@ -925,7 +983,8 @@ class EcranBombe(EcranPartie):
     def _fin(self) -> None:
         self.fini = True
         self.maj("stimulus", logo.rangee("fin"))
-        self.maj("minuterie", Text(f"score {self.partie.score:.1f} — Entrée pour rejouer, Échap pour le menu", style=BLANC))
+        self.maj("minuterie", Text(f"score {self.partie.score:.1f} — Entrée pour rejouer, Échap pour le menu · "
+                                   "/d ruv : les mots en RUV avec leur définition", style=BLANC))
 
 
 # ── Syllabaire (entraînement de la Bombe) ───────────────────────────────────────────────────────

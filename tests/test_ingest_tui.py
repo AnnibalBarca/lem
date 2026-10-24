@@ -255,3 +255,38 @@ async def test_accueil_touche_chiffre_lance_le_jeu(tmp_path):
         await pilot.press("escape")
         await pilot.press("1")
         assert isinstance(app.screen, EcranCartes)
+
+
+async def test_bombe_recherche_pendant_et_apres_la_partie(tmp_path):
+    from textual.widgets import Input
+
+    from lem.cli import main
+    from lem.contexte import Contexte
+    from lem.tui.app import EcranBombe, LemApp
+
+    chemin = tmp_path / "t.sqlite"
+    main(["--db", str(chemin), "demo", "--sans-jeu"])
+    app = LemApp(Contexte(chemin))
+    async with app.run_test(size=(110, 50)) as pilot:
+        await pilot.pause(1.6)
+        await pilot.press("2")
+        e = app.screen
+        assert isinstance(e, EcranBombe)
+        while not e.pret:
+            await pilot.pause(0.05)
+
+        async def chercher(texte):
+            await pilot.press(*texte, "enter")
+            await pilot.pause(0.1)
+            while e.occupe:
+                await pilot.pause(0.02)
+            return " ".join(str(e.query_one("#retour").render()).split())
+
+        sortie = await chercher("/d min")                          # pendant la partie
+        assert "éminent" in sortie and "« min »" in sortie and e.query_one("#saisie", Input).value == ""
+        e.partie.vies = 0
+        e._fin()                                                   # la partie est finie
+        sortie = await chercher("/d min")                          # après
+        assert "éminent" in sortie
+        sortie = await chercher("/d science")                      # un domaine reste un filtre, pas une recherche
+        assert "éminent" not in sortie
