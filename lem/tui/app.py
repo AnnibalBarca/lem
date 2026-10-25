@@ -380,7 +380,6 @@ class EcranPartie(Screen):
         return self.partie is not None and not self.occupe
 
     def on_unmount(self) -> None:
-        self.ctx.dictee.arreter()
         if getattr(self.ctx, "sur_verdict", None) == getattr(self, "_sur_verdict", None):
             self.ctx.sur_verdict = None
         if self.session_id:
@@ -392,17 +391,6 @@ class EcranPartie(Screen):
 
     def maj(self, id_: str, contenu) -> None:
         self.query_one(f"#{id_}", Static).update(contenu)
-        if id_ in ("stimulus", "retour"):                 # the question or the state of the field changed
-            self.call_after_refresh(self.rafraichir_dictee)
-
-    def mode_dictee(self) -> str | None:
-        """What voxmac should do now: "texte" (type what is said), "chiffres" (a 1–4 choice), None (nothing: the
-        keyboard is needed, or there is no field)."""
-        return "texte"
-
-    def rafraichir_dictee(self) -> None:
-        if self.is_mounted:
-            self.ctx.dictee.regler(self.mode_dictee() if self.pret else None)
 
     def on_input_changed(self, ev: Input.Changed) -> None:
         if ev.value and not ev.value.startswith("/"):     # "" = champ vidé par le programme
@@ -414,10 +402,6 @@ class EcranPartie(Screen):
             return False
         if texte.strip("/ ").lower() in {"quitter", "q", "menu"}:
             self.action_quitter()
-            return True
-        if texte.strip("/ ").lower().split()[:1] == ["dictee"]:
-            self._dictee(texte.strip("/ ").split()[1:])
-            self.query_one("#saisie", Input).value = ""
             return True
         if texte.strip("/ ").lower().split()[:1] == ["accents"]:
             self._accents(texte.strip("/ ").split()[1:])
@@ -440,18 +424,6 @@ class EcranPartie(Screen):
                 self.reconfigurer()
         self.query_one("#saisie", Input).value = ""
         return True
-
-    def _dictee(self, args: list[str]) -> None:
-        """/dictee oui|non — hands-free dictation through voxmac (global setting)."""
-        from lem.db import set_reglage
-
-        if args and args[0].lower() in {"oui", "non"}:
-            set_reglage(self.ctx.con, "dictee", args[0].lower() == "oui")
-            self.ctx.con.commit()
-            self.ctx.dictee.actif = args[0].lower() == "oui"
-            self.ctx.dictee.arreter()
-            self.rafraichir_dictee()
-        self.maj("retour", Text("dictée mains libres : " + ("oui" if self.ctx.dictee.actif else "non"), style=BLANC))
 
     def _accents(self, args: list[str]) -> None:
         """/accents oui|non — réglage global, pour tous les jeux : accents manquants tolérés ou non."""
@@ -612,14 +584,6 @@ class EcranCartes(EcranPartie):
         if self.pret and self.item and self.item.exercice == "discrimination" and self.resultat is None:
             self.choix = (self.choix + pas) % len(self.item.options)
             self.maj("stimulus", self._options())
-
-    def mode_dictee(self) -> str | None:
-        it = self.item
-        if it is None or getattr(self, "recopies", None):
-            return None                                   # spelling is typed: a dictation writes for you
-        if self.resultat is not None:
-            return "chiffres"                             # grade 1–4, or Enter
-        return {"graphie": None, "discrimination": "chiffres"}.get(it.exercice, "texte")
 
     def action_inutile(self) -> None:
         """Ctrl+X (or /inutile): the word on screen is useless to me. It is hidden for good and the game moves on."""
@@ -1292,9 +1256,6 @@ class EcranSyllabaire(EcranPartie):
 # ── Mémoire verbale ─────────────────────────────────────────────────────────────────────────────
 
 class EcranMemoire(EcranPartie):
-    def mode_dictee(self) -> str | None:
-        return None                                       # answered with single keys, no text field
-
     BINDINGS = [Binding("escape", "quitter", "Menu"), Binding("v", "vu", "Vu"), Binding("n", "nouveau", "Nouveau"),
                 Binding("space", "image", "Image prête", show=False)]
 
@@ -1410,9 +1371,6 @@ class EcranMemoire(EcranPartie):
 # ── Décision (étalonnage) ───────────────────────────────────────────────────────
 
 class EcranDecision(EcranPartie):
-    def mode_dictee(self) -> str | None:
-        return None                                       # answered with single keys, no text field
-
     BINDINGS = [Binding("escape", "quitter", "Menu"), Binding("o", "oui", "Oui"), Binding("n", "non", "Non")]
 
     def construire(self):

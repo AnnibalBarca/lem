@@ -45,15 +45,6 @@ class Contexte:
         return Lexique(self.con)
 
     @cached_property
-    def dictee(self):
-        """Hands-free dictation through voxmac (lem.dictee); `/dictee non` turns it off."""
-        from lem.dictee import Dictee
-
-        import os
-
-        return Dictee(actif=bool(get_reglage(self.con, "dictee", True)) and os.environ.get("LEM_DICTEE", "1") != "0")
-
-    @cached_property
     def juge(self):
         """Juge en direct des définitions (Claude Haiku ou modèle Ollama, cf. `/juge`), ou None."""
         from lem.grading.local import juge_depuis_reglage
