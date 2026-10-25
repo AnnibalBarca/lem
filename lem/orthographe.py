@@ -242,9 +242,9 @@ def surligner(saisie: str, correcte: str, style_faute: str = f"bold underline {G
         if tag == "equal":
             bon.append(c[j1:j2], "bold #f2f2f2")
             tape.append(s[i1:i2], "#8a8a8a")
-        else:
-            bon.append(c[j1:j2], style_faute)
-            tape.append(s[i1:i2] or "·", "strike #ff5f5f")
+        else:                                           # a faulty space is shown, not underlined into « _ »
+            bon.append(c[j1:j2].replace(" ", "␣"), style_faute)
+            tape.append(s[i1:i2].replace(" ", "␣") or "·", "strike #ff5f5f")
     return bon, tape
 
 

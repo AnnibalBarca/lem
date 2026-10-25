@@ -7,7 +7,7 @@ from lem.db import now
 from lem.games import REGISTRE
 from lem.games.bombe import PartieBombe
 from lem.games.cartes import PartieCartes
-from lem.grading.direct import fautes_dans, noter_recep
+from lem.grading.direct import fautes_dans, noter_prod, noter_recep
 from lem.memory import scheduler
 from lem.orthographe import classer, cle_phonetique, diagnostiquer, motifs, profil, risque, surligner
 
@@ -138,3 +138,20 @@ def test_classer_strict_garde_l_accent():
 
     assert classer("eminent", "éminent", strict=True) == ["accent"]
     assert classer("eminnt", "éminent") == ["omission"]          # the other fault is still seen, accent aside
+
+
+def test_seul_le_mot_demande_est_corrige(con, carte, rng):
+    """« petit-oiseau » for oiseau-moqueur: a wrong answer, never « retype petit oiseau »."""
+    a, t = eid(con, "acronyme"), eid(con, "thuriféraire")
+    v = noter_prod(con, a, "turiféraire")                 # a misspelling of ANOTHER word
+    assert v.mode == "autre_mot" and v.entree_donnee == t and v.graphie is None
+    partie = PartieCartes(con, {**REGISTRE["cartes"].defauts(), "nouveaux": 0}, carte, rng=rng)
+    res = partie.repondre(partie._item("prod", a), "turiféraire", 2500)
+    assert not res.correct and not res.fautes            # nothing to retype
+    res = partie.repondre(partie._item("graphie", a), "turiféraire", 2500)
+    assert [d.correcte for d in res.fautes] == ["acronyme"]
+
+
+def test_surligner_montre_une_espace_fautive():
+    bon, tape = surligner("petit-oiseau", "petit oiseau")
+    assert bon.plain == "petit␣oiseau" and "_" not in bon.plain

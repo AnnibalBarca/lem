@@ -378,6 +378,8 @@ class PartieCartes:
             note = 3 if correct and not it.indices else 1
             trace = "ortho"
             diag = None if correct else diagnostiquer(self.con, texte, cible_id=it.entree_id)
+            if diag and diag.entree_id != it.entree_id:   # closer to another word: the fault is still on this one
+                diag = None
             data["graphie"] = diag.resume() if diag else None
             if not correct:
                 fautes.append(diag or Diagnostic(texte, it.forme, it.entree_id, -1, ["inconnu"], False, 0.0))

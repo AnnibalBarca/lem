@@ -185,6 +185,8 @@ def noter_prod(con: sqlite3.Connection, entree_id: int, reponse: str, magasin_en
         # Le mot est retrouvé (trace prod : « difficile »), mais la graphie est fausse (trace ortho : raté).
         return VerdictProd(False, "graphie", entree_id, None, 2, diag)
     if diag:
+        # Close to ANOTHER word (« petit-oiseau » for oiseau-moqueur): a wrong answer, not a spelling fault.
+        # Only the word asked is ever corrected and retyped.
         comp = comparer(con, entree_id, diag.entree_id, magasin_entrees)
-        return VerdictProd(False, "autre_mot", diag.entree_id, comp, 1, diag)
+        return VerdictProd(False, "autre_mot", diag.entree_id, comp, 1)
     return VerdictProd(False, "inconnu", None, None, 1)
