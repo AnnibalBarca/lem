@@ -61,7 +61,7 @@ def test_aucune_variante_dans_la_bombe(con, carte, rng):
 def test_cartes_faute_puis_insistance(con, carte, rng):
     p = {**REGISTRE["cartes"].defauts(), "nouveaux": 4, "exercice": "prod", "confusables": False}
     partie = PartieCartes(con, p, carte, rng=rng)
-    it = partie.suivant()
+    it = partie._item("prod", partie.suivant().entree_id)         # a word whose meaning is found (the sonde is recep)
     faute = it.forme[0] + it.forme[2:]                          # une lettre omise
     res = partie.repondre(it, faute, 2500)
     assert res.prod.mode == "graphie" and not res.correct
@@ -94,7 +94,7 @@ def test_dictee_reperee_et_jamais_comptee_comme_faute(con, carte, rng):
     assert nettoyer_saisie(" Acronyme. ") == "Acronyme"
     p = {**REGISTRE["cartes"].defauts(), "nouveaux": 4, "exercice": "prod", "confusables": False}
     partie = PartieCartes(con, p, carte, rng=rng)
-    it = partie.suivant()
+    it = partie._item("prod", partie.suivant().entree_id)         # a word whose meaning is found (the sonde is recep)
     faute = it.forme[0] + it.forme[2:]
     res = partie.repondre(it, faute + ".", 2500, Frappe(300, 0, 0, 1))      # Whisper a mal écrit
     assert res.correct and res.prod.mode == "dicte" and not res.fautes

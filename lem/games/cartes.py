@@ -17,7 +17,9 @@ auto-évaluation 1–4 (Entrée = accepter la note proposée). Tout est écrit a
 L'ordre des cartes est décidé carte après carte par le planificateur (lem/memory/planificateur.py) :
   * un mot nouveau est d'abord SONDÉ (mot → sens ; Entrée seule = « je ne sais pas ») : connu, il ne coûte
     qu'une carte et revient une seule fois, dans 1 à 2 mois ; sinon il entre en apprentissage : retour du
-    sens aux étapes FSRS, duel quelques cartes plus loin, « sens → mot » plus loin encore ;
+    sens aux étapes FSRS, duel quelques cartes plus loin, « sens → mot » une fois le sens retrouvé ;
+  * jamais de « sens → mot » pour un mot dont tu n'as pas encore retrouvé le sens (mot → sens noté 3 ou 4) :
+    on ne découvre pas un mot par sa définition ;
   * une carte ratée revient dans la session (étapes FSRS), jamais collée à une carte du même mot ;
   * le nombre de mots nouveaux suit la charge de révisions à venir ;
   * l'intention (équilibre, découvrir, consolider, confusables, graphie) règle ces dosages.
@@ -193,9 +195,13 @@ class PartieCartes:
         # Révisions : dues maintenant (consolider : aussi les fragiles des deux jours à venir).
         quand = now() + timedelta(days=2) if intention == "consolider" else now()
         revisions = []
-        for t in scheduler.dues(self.con, quand, limite=p["revisions_max"], traces=traces, entree_ids=ids):
+        dues = scheduler.dues(self.con, quand, limite=p["revisions_max"], traces=traces, entree_ids=ids)
+        reconnus = _reconnus(self.con, {t.entree_id for t in dues if t.trace == "prod"})
+        for t in dues:
             if t.entree_id in self._hors_jeu:
                 continue
+            if t.trace == "prod" and t.entree_id not in reconnus:
+                continue                                   # its meaning never found yet: « mot → sens » first
             if intention == "decouvrir" and t.retrievabilite > 0.85 and t.statut is None:
                 continue                                   # découvrir : seulement les révisions qui pressent
             role = "verification" if t.statut == "connu_sonde" else "revision"
@@ -206,11 +212,13 @@ class PartieCartes:
         # Mots ouverts lors d'une session précédente (sonde ratée) dont la carte « sens → mot » n'a pas eu le
         # temps de venir : elle ouvre la session suivante, au lieu d'être perdue.
         if "prod" in traces and intention != "consolider":
-            for (e, s_id) in self.con.execute(
-                    """SELECT t.entree_id, t.sens_id FROM trace_etat t WHERE t.trace = 'recep' AND t.statut IS NULL
-                       AND NOT EXISTS (SELECT 1 FROM trace_etat u WHERE u.entree_id = t.entree_id AND u.trace = 'prod')
-                       ORDER BY t.maj LIMIT ?""", (p["revisions_max"],)):
-                if e not in self._hors_jeu and (ids is None or e in ids):
+            ouverts = self.con.execute(
+                """SELECT t.entree_id, t.sens_id FROM trace_etat t WHERE t.trace = 'recep' AND t.statut IS NULL
+                   AND NOT EXISTS (SELECT 1 FROM trace_etat u WHERE u.entree_id = t.entree_id AND u.trace = 'prod')
+                   ORDER BY t.maj LIMIT ?""", (p["revisions_max"],)).fetchall()
+            reconnus = _reconnus(self.con, {e for e, _ in ouverts})
+            for (e, s_id) in ouverts:
+                if e not in self._hors_jeu and e in reconnus and (ids is None or e in ids):
                     revisions.append(Tache("prod", e, s_id, "apprentissage", nouveau=True, r=0.5))
 
         # Budget de mots nouveaux : la capacité de la session moins la charge de révisions à venir.
@@ -488,6 +496,20 @@ def _rapide(latence_ms: int | None, frappe: Frappe, n_lettres: int) -> bool:
         return False
     pf = frappe.premiere_frappe_ms
     return latence_ms <= 1500 + 250 * n_lettres and (pf is None or pf <= 1500)
+
+
+def _reconnus(con: sqlite3.Connection, ids: set[int]) -> set[int]:
+    """The words whose meaning you have found at least once in Cards (« mot → sens » graded 3 or 4, by the best
+    grader available). Only those get « sens → mot » cards: a definition is no way to discover a word."""
+    if not ids:
+        return set()
+    marques = ", ".join("?" * len(ids))
+    out = set()
+    for r in con.execute(f"""SELECT id, entree_id, note_auto FROM evenement WHERE jeu = 'cartes' AND type = 'reponse'
+                             AND trace = 'recep' AND entree_id IN ({marques})""", tuple(ids)):
+        if r["entree_id"] not in out and (scheduler.note_finale(con, r["id"], r["note_auto"]) or 0) >= 3:
+            out.add(r["entree_id"])
+    return out
 
 
 def _espacer_soeurs(revs: list[Tache]) -> list[Tache]:

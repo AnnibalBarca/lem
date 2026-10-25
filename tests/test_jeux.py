@@ -133,19 +133,19 @@ def test_cartes_file_et_reponses(con, carte, rng, emb, magasins):
             vus.add(it.exercice)
             texte = it.forme if it.exercice == "prod" else ("1" if it.exercice == "discrimination" else it.definition)
             if it.exercice == "recep" and len(vus) == 1:
-                texte = "je ne sais pas"                         # une sonde ratée : le mot s'apprend (duel, sens → mot)
+                texte = "je ne sais pas"                         # une sonde ratée : le mot s'apprend (duel)
             res = partie.repondre(it, texte, 3000)
             partie.valider(res, None)
             t["s"] += 60
     finally:
         regler_horloge(None)
-    assert {"recep", "prod"} <= vus
+    assert {"recep", "discrimination"} <= vus and "prod" not in vus     # meaning never found: no « sens → mot »
     assert con.execute("SELECT COUNT(*) FROM trace_etat").fetchone()[0] > 0
 
 
 def test_cartes_indice_plafonne_la_note(con, carte, rng):
     partie = PartieCartes(con, params("cartes", nouveaux=3, exercice="prod", confusables=False), carte, rng=rng)
-    it = partie.suivant()
+    it = partie._item("prod", partie.suivant().entree_id)
     partie.indice(it)
     partie.indice(it)
     res = partie.repondre(it, it.forme, 2000)

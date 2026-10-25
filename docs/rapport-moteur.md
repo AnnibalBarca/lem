@@ -171,3 +171,31 @@ la trouve lassante) et que son coût mesuré est faible. À revoir sur le journa
 
 Autre changement de la même session : `/intention` tapée en cours de partie ne s'enregistre plus (une intention
 « consolider » restée en réglage supprimait tout mot nouveau, sans que ce soit voulu).
+
+## 8. Jamais de « sens → mot » pour un mot dont le sens n'a pas été retrouvé (session Mac, 25 octobre)
+
+Constat sur la vraie base : *oiseau-moqueur*, sonde ratée le 22 (« une espèce de petit oiseau »), est revenu le
+23 puis le 25 en « sens → mot » : la définition seule, pour un mot jamais reconnu. On ne découvre pas un mot par
+sa définition. Règle (choix de l'utilisateur) : la sonde est toujours « mot → sens » (même en `/exercice prod`) ;
+après une sonde ratée, « sens → mot » n'est programmé qu'après un « mot → sens » réussi (note ≥ 3, meilleur
+correcteur) ; à la construction de la session, les révisions `prod` et les « sens → mot » laissés par une session
+précédente sont écartés tant que le sens n'a jamais été retrouvé (`_reconnus` dans `lem/games/cartes.py`).
+
+Banc, 3 graines par profil :
+
+| Élève | Sens retenus/h | Mots retenus/h | Min. sur mots connus | Brier carte |
+|---|---|---|---|---|
+| faible | 13,6 → 13,2 | 11,1 → 8,0 | 18,4 → 22,3 | 0,078 → 0,073 |
+| moyen | 18,8 → 19,0 | 15,9 → 12,4 | 20,4 → 25,7 | 0,080 → 0,080 |
+| fort | 22,9 → 23,6 | 21,0 → 18,4 | 24,2 → 25,3 | 0,078 → 0,079 |
+
+Lecture : **sens retenus inchangés**, carte inchangée, **mots retenus (forme) en baisse de 13 à 28 %** : le « sens
+→ mot » arrive plus tard. Ce n'est pas un gain au sens de la règle du banc : adopté sciemment, parce que l'élève
+simulé sait produire un mot qu'il n'a vu qu'une fois sans l'avoir compris, ce qui n'est pas le cas réel visé.
+Essayée et écartée : remontrer le mot (« mot → sens ») 10 cartes et 5 minutes après la sonde ratée, puis
+« sens → mot » s'il est retrouvé — formes un peu remontées (faible 8,6/h, moyen 13,0/h) mais sens en baisse chez
+l'élève fort (23,6 → 20,8/h) : pas de gain net. À revoir sur le journal réel.
+
+Même session : en « sens → mot » comme en graphie, seul le mot demandé est corrigé ; une réponse proche d'un AUTRE
+mot (« petit-oiseau » pour *oiseau-moqueur*, proche de *petit oiseau*) est une mauvaise réponse, pas une faute à
+retaper. La synchronisation de la dictée avec voxmac (socket Unix) est retirée.

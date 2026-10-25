@@ -20,9 +20,19 @@ def test_sonde_puis_parcours_d_apprentissage():
     assert x.role == "sonde" and x.exercice == "recep" and x.entree_id == 1
     assert plan.apres_reponse(x, 0, 1, None, a_des_voisins=True) == "apprentissage"
     att = {(y.exercice, y.role) for y in plan.attente}
-    assert ("discrimination", "apprentissage") in att and ("prod", "apprentissage") in att
+    assert ("discrimination", "apprentissage") in att
+    assert "prod" not in {y.exercice for y in plan.attente}       # never discovered through its definition
+    retour = Tache("recep", 1, role="apprentissage")
+    plan.apres_reponse(retour, 60, 1, None)                       # meaning still not found: still no « sens → mot »
+    assert "prod" not in {y.exercice for y in plan.attente}
+    plan.apres_reponse(retour, 120, 3, None)                      # found: now its definition is a fair clue
     prod = next(y for y in plan.attente if y.exercice == "prod")
-    assert prod.apres >= plan.n + P.ECART_PROD - 1 and prod.pret_a >= P.DELAI_PROD
+    assert prod.apres >= plan.n + P.ECART_PROD - 1 and prod.pret_a >= 120 + P.DELAI_PROD
+
+
+def test_la_sonde_montre_toujours_le_mot():
+    plan = Planificateur(revisions=[], candidats=[1], budget_nouveaux=1, directions=("prod",))
+    assert plan.prochaine(0).exercice == "recep"
 
 
 def test_sonde_reussie_ne_coute_qu_une_carte_et_pas_de_budget():
@@ -111,19 +121,26 @@ def test_verification_ratee_remet_en_apprentissage(con, carte, rng, horloge):
     assert st["statut"] is None and (scheduler.parse_iso(st["due"]) - horloge["v"]).days < 7
 
 
-def test_sonde_ratee_programme_sens_vers_mot_meme_a_la_session_suivante(con, carte, rng, horloge):
+def test_sonde_ratee_sens_vers_mot_seulement_une_fois_le_sens_retrouve(con, carte, rng, horloge):
     p = {**REGISTRE["cartes"].defauts(), "nouveaux": 2, "confusables": False}
     partie = PartieCartes(con, p, carte, rng=rng)
     it = partie.suivant()
     assert partie.valider(partie.repondre(it, "?", 2000), 1) == "apprentissage"
-    # La session s'arrête là : le « sens → mot » prévu 10 cartes plus loin n'a pas eu lieu.
-    horloge["v"] += timedelta(days=1)
-    partie2 = PartieCartes(con, {**p, "nouveaux": 0}, carte, rng=rng)
-    vus = []
-    while (x := partie2.suivant()) is not None and len(vus) < 10:
-        vus.append((x.exercice, x.entree_id))
-        partie2.valider(partie2.repondre(x, x.forme if x.exercice == "prod" else "?", 2000), 1)
-    assert ("prod", it.entree_id) in vus
+
+    def session(note_recep):
+        horloge["v"] += timedelta(days=3)
+        partie2 = PartieCartes(con, {**p, "nouveaux": 0}, carte, rng=rng)
+        vus = []
+        while (x := partie2.suivant()) is not None and len(vus) < 10:
+            vus.append((x.exercice, x.entree_id))
+            partie2.valider(partie2.repondre(x, x.forme if x.exercice == "prod" else "?", 2000),
+                            note_recep if x.exercice == "recep" else 1)
+        return vus
+
+    vus = session(1)                                  # the word comes back as itself, never as its definition
+    assert ("recep", it.entree_id) in vus and ("prod", it.entree_id) not in vus
+    session(3)                                        # meaning found…
+    assert ("prod", it.entree_id) in session(3)       # … from now on « sens → mot » is fair
 
 
 def test_optimiseur_apprend_et_ne_s_emballe_pas():

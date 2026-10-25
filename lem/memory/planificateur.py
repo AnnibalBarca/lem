@@ -4,7 +4,8 @@ Le moteur v1 construisait une file une fois pour toutes. Le planificateur décid
 l'horloge du moteur, à partir de quatre réservoirs :
 
   attente     cartes à remontrer dans la session : étapes d'apprentissage FSRS (1 min, 10 min), duel et
-              « sens → mot » d'un mot qu'on vient de découvrir, graphie à reprendre. Chacune a une heure
+              « sens → mot » d'un mot qu'on vient de découvrir (seulement une fois son sens retrouvé : on ne
+              découvre jamais un mot par sa définition), graphie à reprendre. Chacune a une heure
               (`pret_a`) et un numéro de carte minimum (`apres`).
   revisions   traces FSRS dues, les plus fragiles d'abord (et la vérification unique des mots connus).
   candidats   mots nouveaux, déjà classés par valeur ; chacun commence par une SONDE (mot → sens).
@@ -66,7 +67,7 @@ class Planificateur:
     candidats: list[int] = field(default_factory=list)
     budget_nouveaux: int = 10
     duels: bool = True
-    directions: tuple[str, ...] = ("recep", "prod")         # exercices pratiqués ; le premier sert de sonde
+    directions: tuple[str, ...] = ("recep", "prod")         # exercices pratiqués ; la sonde est toujours « recep »
     attente: list[Tache] = field(default_factory=list)
     n: int = 0                                            # cartes montrées
     dernier: dict[int, int] = field(default_factory=dict)  # mot → numéro de sa dernière carte
@@ -75,6 +76,7 @@ class Planificateur:
     entres: int = 0                                       # mots entrés en apprentissage (budget consommé)
     connus: int = 0                                       # sondes réussies
     retours: dict = field(default_factory=dict)           # (mot, exercice) → nombre de retours dans la session
+    decouverts: set[int] = field(default_factory=set)      # sonde ratée : « sens → mot » attend un « mot → sens » réussi
     _rev_depuis_nouveau: int = 0
 
     # -- réserves --------------------------------------------------------------------------------
@@ -107,7 +109,7 @@ class Planificateur:
             if e is not None:
                 self._rev_depuis_nouveau = 0
                 self.sondes += 1
-                return self._noter(Tache(self.directions[0], e, role="sonde", nouveau=True))
+                return self._noter(Tache("recep", e, role="sonde", nouveau=True))
         if rev is not None:
             self._rev_depuis_nouveau += 1
             return self._prendre(rev, self.revisions)
@@ -126,7 +128,7 @@ class Planificateur:
             e = self._candidat()
             if e is not None:
                 self.sondes += 1
-                return self._noter(Tache(self.directions[0], e, role="sonde", nouveau=True))
+                return self._noter(Tache("recep", e, role="sonde", nouveau=True))
         # 4. Il ne reste que des cartes sœurs de mots vus à l'instant : la moins récente passe quand même
         #    (mieux qu'une session qui s'arrête avec des révisions dues).
         if self.revisions:
@@ -178,18 +180,22 @@ class Planificateur:
                 self.connus += 1
                 return "connu"
             # Sonde ratée ou floue : le mot entre en apprentissage. Révélation faite, on programme la
-            # suite : retour du sens à l'étape FSRS, duel, puis « sens → mot » plus tard.
+            # suite : retour du sens à l'étape FSRS, duel ; « sens → mot » attendra que le sens soit retrouvé.
             self.entres += 1
             self.en_cours.add(e)
+            self.decouverts.add(e)
             if echeance is not None and echeance - t <= HORIZON:      # étape FSRS courte, si on en a réglé
                 self.ajouter(Tache(tache.exercice, e, tache.sens_id, "apprentissage", pret_a=echeance,
                                    apres=self.n + ECART_SOEURS))
             if self.duels and a_des_voisins:
                 self.ajouter(Tache("discrimination", e, tache.sens_id, "apprentissage", apres=self.n + ECART_DUEL))
-            if tache.exercice == "recep" and "prod" in self.directions:
-                self.ajouter(Tache("prod", e, tache.sens_id, "apprentissage", pret_a=t + DELAI_PROD,
-                                   apres=self.n + ECART_PROD, nouveau=True))
             return "apprentissage"
+        if (tache.exercice == "recep" and e in self.decouverts and note is not None and note >= 3
+                and "prod" in self.directions):
+            # The word is recognised now: only then is its definition a fair clue (« sens → mot »).
+            self.decouverts.discard(e)
+            self.ajouter(Tache("prod", e, tache.sens_id, "apprentissage", pret_a=t + DELAI_PROD,
+                               apres=self.n + ECART_PROD, nouveau=True))
         if tache.exercice in ("recep", "prod", "graphie") and echeance is not None and echeance - t <= HORIZON:
             # Étape d'apprentissage ou de réapprentissage : la carte revient dans la session.
             if self.ajouter(Tache(tache.exercice, e, tache.sens_id, "apprentissage", pret_a=echeance,
@@ -202,6 +208,6 @@ class Planificateur:
     def apercu(self) -> list[Tache]:
         """Ordre approximatif des prochaines cartes (pour l'affichage et les tests) ; sans effet."""
         att = sorted(self.attente, key=lambda x: (x.pret_a, x.apres))
-        nouv = [Tache(self.directions[0], e, role="sonde", nouveau=True)
+        nouv = [Tache("recep", e, role="sonde", nouveau=True)
                 for e in self.candidats[: max(0, self.budget_nouveaux - self.entres)]]
         return att + self.revisions + nouv
