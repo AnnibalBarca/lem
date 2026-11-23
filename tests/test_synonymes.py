@@ -191,7 +191,7 @@ async def test_tui_synonymes(tmp_path):
         while not e.pret:
             await pilot.pause(0.05)
         t = e.partie.tour
-        assert t is not None
+        assert t is not None and e.params["mode"] == "libre"
         syn_id = next(iter(e.partie.graphe[t.entree_id]))
         syn_forme = ctx.con.execute("SELECT forme FROM entree WHERE id = ?", (syn_id,)).fetchone()[0]
         await pilot.press(*syn_forme, "enter")

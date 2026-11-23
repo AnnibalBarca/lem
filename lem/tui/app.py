@@ -1662,6 +1662,9 @@ class EcranSynonymes(EcranPartie):
     def _tic(self) -> None:
         if self.partie is None or self.etape != "jeu" or self.partie.tour is None:
             return
+        if self.params.get("mode", "libre") != "chrono":
+            self.maj("minuterie", Text("mode libre — Entrée seule : fini · /mode chrono : minuterie", style=SOMBRE))
+            return
         if self.occupe:
             self.t_tour += 0.1
             return
@@ -1824,7 +1827,7 @@ class EcranLabog(EcranPartie):
                 with Center():
                     yield Static(id="stimulus")
                 yield Static(id="minuterie")
-                yield Input(id="saisie", placeholder="tape un mot de la grille — /d : indice · Ctrl+R : tourner · Entrée seule : bilan")
+                yield Input(id="saisie", placeholder="mot — /r tourner · /d indice · /i init. · /l long. · /s stats · Entrée seule : fin")
                 yield Static(id="retour")
                 yield VerticalScroll(Static(id="detail"))
         yield Footer()
@@ -1849,7 +1852,7 @@ class EcranLabog(EcranPartie):
 
     def commande(self, texte: str) -> bool:
         s = texte.strip().lower()
-        if s in {"/d", "/indice"}:
+        if s in {"/d", "/h", "/indice"}:
             self.query_one("#saisie", Input).value = ""
             if self.pret and self.etape == "jeu":
                 ind = self.partie.indice()
@@ -1862,9 +1865,38 @@ class EcranLabog(EcranPartie):
                         t.append(f"  — {ind['definition'][:90]}", style=GRIS)
                     self.maj("retour", t)
             return True
-        if s in {"/tourner", "/rot"}:
+        if s in {"/r", "/t", "/tourner", "/rot"}:
             self.query_one("#saisie", Input).value = ""
             self.action_tourner()
+            return True
+        if s == "/i":
+            self.query_one("#saisie", Input).value = ""
+            self.params["par_initiale"] = not self.params.get("par_initiale", True)
+            self.ctx.sauver_params(self.jeu, self.params, en_partie=True)
+            if self.pret and self.etape == "jeu":
+                self._rafraichir()
+            self.maj("retour", Text(f"initiales : {'oui' if self.params['par_initiale'] else 'non'}", style=GRIS))
+            return True
+        if s == "/l":
+            self.query_one("#saisie", Input).value = ""
+            self.params["par_longueur"] = not self.params.get("par_longueur", True)
+            self.ctx.sauver_params(self.jeu, self.params, en_partie=True)
+            if self.pret and self.etape == "jeu":
+                self._rafraichir()
+            self.maj("retour", Text(f"longueurs : {'oui' if self.params['par_longueur'] else 'non'}", style=GRIS))
+            return True
+        if s in {"/s", "/stats", "/total"}:
+            self.query_one("#saisie", Input).value = ""
+            if self.pret and self.etape == "jeu":
+                p = self.partie
+                restants = [m for m in p.cibles if m not in p.trouves]
+                plus_long = max((len(m) for m in restants), default=0)
+                t = Text(f"{len(p.trouves)}/{len(p.cibles)} mots · {p.score}/{p.score_max} pts", style=f"bold {BLANC}")
+                if plus_long:
+                    t.append(f" · plus long restant : {plus_long} lettres", style=GRIS)
+                t.append("\n", style=GRIS)
+                t.append("  ".join(f"{c}:{f}/{tot}" for c, f, tot in p.compteurs_initiales() if f < tot), style=GRIS)
+                self.maj("retour", t)
             return True
         if s == "/fin":
             self.query_one("#saisie", Input).value = ""
@@ -1922,9 +1954,11 @@ class EcranLabog(EcranPartie):
     def _tic(self) -> None:
         if self.partie is None or self.etape != "jeu":
             return
+        if self.params.get("mode", "libre") != "chrono":
+            self.maj("minuterie", Text("mode libre — Entrée seule ou /fin : bilan · /mode chrono : minuterie", style=SOMBRE))
+            return
         duree = self.params.get("duree", 180)
         if not duree:
-            self.maj("minuterie", Text("mode libre — Entrée seule ou /fin pour le bilan", style=SOMBRE))
             return
         if self.occupe:
             self.t_debut += 0.2

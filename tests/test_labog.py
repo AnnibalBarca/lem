@@ -143,12 +143,23 @@ async def test_tui_labog(tmp_path):
         while not e.pret:
             await pilot.pause(0.05)
         detail = str(e.query_one("#detail").render())
+        assert e.params["mode"] == "libre"
         assert "initiales" in detail and "longueurs" in detail
-        # Bascule des options en direct
-        await pilot.press(*"/par_initiale non", "enter")
+        # Commandes courtes : /i, /l, /s, /r, /d
+        grille_avant = e.partie.grille
+        await pilot.press(*"/r", "enter")
+        await pilot.pause(0.05)
+        assert e.partie.grille == tourner_grille(grille_avant)
+        await pilot.press(*"/s", "enter")
+        await pilot.pause(0.05)
+        assert "mots" in str(e.query_one("#retour").render())
+        await pilot.press(*"/i", "enter")
         await pilot.pause(0.05)
         assert "initiales" not in str(e.query_one("#detail").render())
         assert "longueurs" in str(e.query_one("#detail").render())
+        await pilot.press(*"/l", "enter")
+        await pilot.pause(0.05)
+        assert "longueurs" not in str(e.query_one("#detail").render())
         # Proposer un mot valide de la grille
         mot = next(iter(e.partie.cibles))
         await pilot.press(*mot, "enter")

@@ -51,13 +51,16 @@ SYNONYMES = enregistrer(Jeu(
     description="Entraînement rapide aux synonymes (français soutenu, Sciences Po, littéraire) : "
                 "validation immédiate sans LLM (Wiktionnaire + bge-m3), nuage déplié et répétition espacée.",
     params=[
+        Param("mode", "Mode", str, "libre", "libre = sans chrono · chrono = avec minuterie",
+              choix=("libre", "chrono")),
         Param("registre", "Registre", str, "standard",
               "standard = soutenu + littéraire (sans familier) · litteraire = formel/littéraire d'abord · tous = tout",
               choix=("standard", "litteraire", "tous")),
         Param("synonymes_min", "Synonymes min", int, 2,
               "nombre minimal de synonymes connus en base pour tirer un mot", 1, 50),
         Param("nouveaux", "Mots nouveaux par session", int, 10, "", 0, 200),
-        Param("duree", "Temps par mot (s)", float, 20.0, "pour donner tous les synonymes que tu trouves", 5, 300),
+        Param("duree", "Temps mode chrono (s)", float, 20.0,
+              "temps par mot en mode chrono", 5, 300),
         Param("ancre_s", "Premier synonyme en moins de (s)", float, 5.0,
               "plus lent : le mot compte comme hésitant", 1, 60),
         Param("seuil_sem", "Seuil proximité bge-m3", float, SEUIL_SEM_DEFAUT,

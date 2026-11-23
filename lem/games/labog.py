@@ -66,6 +66,8 @@ LABOG = enregistrer(Jeu(
     description="Façon LaBOG / Boggle : grilles denses optimisées sur ta carte de connaissance "
                 "(avec compteurs par initiale et par longueur).",
     params=[
+        Param("mode", "Mode", str, "libre", "libre = sans chrono · chrono = avec minuterie",
+              choix=("libre", "chrono")),
         Param("par_initiale", "Compter par initiale", bool, True,
               "affiche toujours le nombre de mots trouvés / total par lettre initiale",
               alias=("initiales", "init")),
@@ -82,8 +84,8 @@ LABOG = enregistrer(Jeu(
               "mots rares/inconnus tolérés sur la grille pendant la génération", 0, 100),
         Param("cible_mots", "Mots visés (min)", int, 50,
               "densité minimale visée par le générateur", 10, 300),
-        Param("duree", "Durée (s, 0 = libre)", int, 180,
-              "durée de la partie en secondes (0 = sans limite)", 0, 1800),
+        Param("duree", "Durée mode chrono (s)", int, 180,
+              "durée en secondes en mode chrono", 15, 1800),
     ],
 ))
 
