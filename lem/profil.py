@@ -96,10 +96,10 @@ def profils(con: sqlite3.Connection, ids=None) -> dict[int, Profil]:
         x = p(r[0])
         if x.graphie is None:
             x.graphie = 1.0
-    # Trouvable : Bombe et Syllabaire.
+    # Trouvable : Bombe, Syllabaire, Synonymes et LaBOG.
     lat: dict[int, list[int]] = {}
     for r in con.execute(
-            f"""SELECT entree_id, latence_ms FROM evenement WHERE jeu IN ('bombe', 'syllabaire') AND type = 'reponse'
+            f"""SELECT entree_id, latence_ms FROM evenement WHERE jeu IN ('bombe', 'syllabaire', 'synonymes', 'labog') AND type = 'reponse'
                 AND correct = 1 AND trace = 'prod' AND entree_id IS NOT NULL
                 AND COALESCE(json_extract(data, '$.aide'), 0) = 0 {filtre}""", args):   # /d : vu, pas trouvé
         lat.setdefault(r[0], []).append(r[1])

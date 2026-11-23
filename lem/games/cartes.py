@@ -35,6 +35,7 @@ from datetime import timedelta
 from lem import utilite
 from lem.confusables import IndexFormel, grappe
 from lem.db import iso, now
+from lem.definitions import resume_etymologie
 from lem.games.bombe import TYPES_HORS_JEU
 from lem.games.base import PARAMS_FILTRES, Jeu, Param, enregistrer, filtres_depuis
 from lem.games.pool import selectionner
@@ -104,6 +105,7 @@ class Resultat:
     prod: VerdictProd | None = None
     sens: list[tuple[int, str]] = field(default_factory=list)
     fautes: list[Diagnostic] = field(default_factory=list)    # à retaper juste avant de continuer
+    etymologie: str = ""
 
 
 class PartieCartes:
@@ -196,17 +198,19 @@ class PartieCartes:
         quand = now() + timedelta(days=2) if intention == "consolider" else now()
         revisions = []
         dues = scheduler.dues(self.con, quand, limite=p["revisions_max"], traces=traces, entree_ids=ids)
-        reconnus = _reconnus(self.con, {t.entree_id for t in dues if t.trace == "prod"})
+        reconnus = _reconnus(self.con, {t.entree_id for t in dues if t.trace in ("prod", "ortho")})
         for t in dues:
             if t.entree_id in self._hors_jeu:
                 continue
-            if t.trace == "prod" and t.entree_id not in reconnus:
+            if t.trace in ("prod", "ortho") and intention != "graphie" and t.entree_id not in reconnus:
                 continue                                   # its meaning never found yet: « mot → sens » first
             if intention == "decouvrir" and t.retrievabilite > 0.85 and t.statut is None:
                 continue                                   # découvrir : seulement les révisions qui pressent
-            role = "verification" if t.statut == "connu_sonde" else "revision"
+            role = ("verification" if t.statut == "connu_sonde"
+                    else "sonde" if t.statut == "bombe_decouvert"
+                    else "revision")
             revisions.append(Tache("graphie" if t.trace == "ortho" else t.trace, t.entree_id, t.sens_id,
-                                   role, r=t.retrievabilite))
+                                   role, nouveau=t.statut == "bombe_decouvert", r=t.retrievabilite))
         revisions = _espacer_soeurs(revisions)
 
         # Mots ouverts lors d'une session précédente (sonde ratée) dont la carte « sens → mot » n'a pas eu le
@@ -223,25 +227,33 @@ class PartieCartes:
 
         # Budget de mots nouveaux : la capacité de la session moins la charge de révisions à venir.
         capacite = p.get("minutes", 15) * 60 / plan_mod.SECONDES_PAR_CARTE
-        charge = scheduler.charge(self.con, 7)
+        charge = scheduler.charge(self.con, 7, traces=("recep", "prod"))
         budget = max(0, min(p["nouveaux"], round((capacite - charge) / plan_mod.COUT_MOT)))
         if intention == "decouvrir":
             budget = p["nouveaux"]
         elif intention in ("consolider", "graphie"):
             budget = 0
 
-        candidats = self._classer_candidats(vivier, intention, 6 * max(budget, 1)) if budget else []
+        rev_ids = {t.entree_id for t in revisions}
+        candidats = [c for c in self._classer_candidats(vivier, intention, 6 * max(budget, 1))
+                     if c not in rev_ids] if budget else []
         directions = {"mixte": ("recep", "prod"), "recep": ("recep",), "prod": ("prod",)}[p["exercice"]]
         self.plan = Planificateur(revisions, candidats, budget, duels=bool(p["confusables"]), directions=directions)
 
     def _classer_candidats(self, vivier, intention: str, n: int) -> list[int]:
         """Les mots nouveaux les plus utiles à sonder, du plus au moins prioritaire."""
-        deja = {r[0] for r in self.con.execute("SELECT DISTINCT entree_id FROM trace_etat")}
+        deja = {r[0] for r in self.con.execute(
+            "SELECT DISTINCT entree_id FROM trace_etat WHERE trace IN ('recep', 'prod') AND COALESCE(statut, '') != 'bombe_decouvert'"
+        )}
         cands = [r for r in vivier if r["id"] not in deja]
         if not cands:
             return []
+        prioritaires = _mots_bombe_a_apprendre(self.con, {r["id"] for r in cands}) if intention != "confusables" else []
+        prio_set = set(prioritaires)
         p_c = dict(zip((r["id"] for r in cands), self.carte.p_de(r["id"] for r in cands)))
-        cands = [r for r in cands if p_c[r["id"]] < 0.9]
+        cands = [r for r in cands if p_c[r["id"]] < 0.9 or r["id"] in prio_set]
+        if not cands:
+            return list(prioritaires[:n])
         if intention == "confusables":
             proches = _proches_des_mots_en_cours(self.con)
             cands = [r for r in cands if r["id"] in proches] or cands
@@ -265,7 +277,12 @@ class PartieCartes:
         fac = utilite.facteurs(self.con, tete, self.magasin_entrees)
         utile = lambda r: valeur(r) * fac.get(r["id"], 1.0)      # noqa: E731
         tete.sort(key=utile, reverse=True)
-        return self._diversifier(tete, utile, n)
+        choisis = self._diversifier(tete, utile, n)
+        if not prioritaires:
+            return choisis
+        out = list(prioritaires[:n])
+        out += [eid for eid in choisis if eid not in prio_set]
+        return out[:n]
 
     def _diversifier(self, cands, valeur, n: int) -> list[int]:
         """Choix glouton : chaque mot retenu rend moins probables, par `diversite`, ceux qui partagent un morphème
@@ -368,14 +385,24 @@ class PartieCartes:
         it.indices = min(len(it.forme), it.indices + 1)
         return it.forme[: it.indices] + "·" * (len(it.forme) - it.indices)
 
+    def _sens_reveles(self, it: Item, recep: VerdictRecep | None, limite: int = 2) -> list[tuple[int, str]]:
+        """Les sens montrés à la révélation : d'abord celui visé par la réponse (ou celui de la carte),
+        puis au plus un autre sens principal, pour ne pas noyer la carte sous huit définitions."""
+        lignes = [(r["id"], r["definition_precise"] or r["definition"]) for r in self.con.execute(
+            "SELECT id, definition, definition_precise FROM sens WHERE entree_id = ? AND definition != '' ORDER BY rang",
+            (it.entree_id,))]
+        if len(lignes) <= limite:
+            return lignes
+        cible = (recep.sens_vise_id if recep and recep.sens_vise_id else None) or it.sens_id
+        lignes.sort(key=lambda s: s[0] != cible)
+        return lignes[:limite]
+
     def repondre(self, it: Item, texte: str, latence_ms: int, frappe: Frappe | None = None) -> Resultat:
         frappe = frappe or Frappe()
         if it.exercice in ("prod", "graphie"):
             texte = nettoyer_saisie(texte)
         if it.exercice == "graphie" and frappe.dictee:
             raise ValueError("la graphie se tape au clavier : une dictée écrit à ta place")
-        sens = [(r["id"], r["definition"]) for r in
-                self.con.execute("SELECT id, definition FROM sens WHERE entree_id = ? AND definition != '' ORDER BY rang", (it.entree_id,))]
         data = {"exercice": it.exercice, "voisins": it.voisins, "indices": it.indices, "nouveau": it.nouveau,
                 "saisie": frappe.mode, "role": it.role}
         recep = prod = None
@@ -424,6 +451,7 @@ class PartieCartes:
             data.update({"options": [o[1] for o in it.options], "choisi": choisi})
             trace = "prod"
             data["fsrs"] = False   # un duel informe la carte de connaissance, pas FSRS
+        sens = self._sens_reveles(it, recep)
         if recep and not frappe.dictee:              # fautes d'une dictée = fautes de Whisper
             fautes += recep.fautes
         eid = ecrire(self.con, self.session_id, Evenement(
@@ -439,7 +467,8 @@ class PartieCartes:
         if it.exercice == "discrimination" and not correct and data.get("choisi"):
             from lem.similarite import enregistrer_confusion
             enregistrer_confusion(self.con, it.entree_id, data["choisi"])
-        return Resultat(it, texte, correct, note, eid, recep, prod, sens, fautes)
+        etym = resume_etymologie(self.con, it.entree_id)
+        return Resultat(it, texte, correct, note, eid, recep, prod, sens, fautes, etymologie=etym)
 
     def _insister(self, d: Diagnostic) -> None:
         """Remet le mot mal écrit trois cartes plus loin (une seule fois par session et par mot)."""
@@ -496,6 +525,44 @@ def _rapide(latence_ms: int | None, frappe: Frappe, n_lettres: int) -> bool:
         return False
     pf = frappe.premiere_frappe_ms
     return latence_ms <= 1500 + 250 * n_lettres and (pf is None or pf <= 1500)
+
+
+def _mots_bombe_a_apprendre(con: sqlite3.Connection, vivier_ids: set[int]) -> list[int]:
+    """Mots rencontrés récemment à la Bombe qui méritent d'être appris aux Cartes :
+    1. Mots obtenus via /d (événement `indice` ou réponse avec `aide = true`) qui ne sont pas évidents
+       (p_prior < 0,65, donc pas « table » ou « bicyclette ») ;
+    2. Mots tapés pour la première fois à la Bombe dont l'a priori est faible (p_prior < 0,45)."""
+    if not vivier_ids:
+        return []
+    rows = con.execute(
+        """SELECT ev.type, ev.entree_id, ev.data, COALESCE(c.p_prior, 0.0) AS prior
+           FROM evenement ev
+           LEFT JOIN connaissance c ON c.entree_id = ev.entree_id
+           WHERE ev.jeu = 'bombe' AND ev.entree_id IS NOT NULL
+             AND ((ev.type = 'reponse' AND ev.correct = 1 AND ev.trace = 'prod') OR ev.type = 'indice')
+           ORDER BY ev.id DESC LIMIT 400"""
+    ).fetchall()
+    if not rows:
+        return []
+    n_bombe = dict(con.execute(
+        """SELECT entree_id, COUNT(*) FROM evenement
+           WHERE jeu = 'bombe' AND type = 'reponse' AND correct = 1 AND trace = 'prod' AND entree_id IS NOT NULL
+           GROUP BY entree_id"""
+    ).fetchall())
+    aides, premiers, vus = [], [], set()
+    for r in rows:
+        eid = r["entree_id"]
+        if eid not in vivier_ids or eid in vus:
+            continue
+        prior = r["prior"]
+        aide = r["type"] == "indice" or '"aide":true' in (r["data"] or "").replace(" ", "")
+        if aide and prior < 0.65:
+            vus.add(eid)
+            aides.append(eid)
+        elif r["type"] == "reponse" and prior < 0.45 and n_bombe.get(eid, 0) <= 1:
+            vus.add(eid)
+            premiers.append(eid)
+    return aides + premiers
 
 
 def _reconnus(con: sqlite3.Connection, ids: set[int]) -> set[int]:

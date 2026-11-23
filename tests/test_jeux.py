@@ -170,9 +170,13 @@ def test_memoire_entrainement_encodage_qui_s_efface(con, rng):
     assert guides_par_partie(0, "estompe") > 1000 and guides_par_partie(120, "estompe") == 10
     assert guides_par_partie(250, "estompe") == 0 and guides_par_partie(250, "guide") > 1000
     assert guides_par_partie(0, "libre") == 0
+    # Mode entraînement par défaut : sans invite « image ? ».
+    m_libre = PartieMemoire(con, params("memoire"), rng=rng)
+    assert m_libre.mode == "entrainement" and not m_libre.suivant().guider
+    # Mode imagerie : avec l'invite « image ? » qui s'estompe.
     sid = con.execute("INSERT INTO session(jeu, debut) VALUES('memoire', '2026-01-01')").lastrowid
-    m = PartieMemoire(con, params("memoire"), session_id=sid, rng=rng)
-    assert m.mode == "entrainement" and m.record == 0
+    m = PartieMemoire(con, params("memoire", mode="imagerie"), session_id=sid, rng=rng)
+    assert m.mode == "imagerie" and m.record == 0
     assert all(" " not in r["forme"] for r in m.etranges)
     t = m.suivant()
     assert t.guider and not t.imager
@@ -184,7 +188,7 @@ def test_memoire_entrainement_encodage_qui_s_efface(con, rng):
     b = m.bilan()
     assert b["fausses_alertes"] >= 1 and b["fausses_alertes"] + b["oublis"] == params("memoire")["vies"]
     assert b["encodage_ms"] == 1400 and b["score"] == 0
-    assert scores(con, "entrainement") == [0] and scores(con, "elucubrations") == []
+    assert scores(con, "imagerie") == [0] and scores(con, "elucubrations") == []
 
 
 def test_etrangete_ordre():
@@ -547,3 +551,112 @@ def test_purger_mot_ou_pas(con):
     con.execute("INSERT INTO evenement(ts, jeu, type) VALUES('2026-01-01T00:00:00.000Z', 'cartes', 'reponse')")
     assert purger_mot_ou_pas(con) == 1
     assert [r[0] for r in con.execute("SELECT jeu FROM evenement")] == ["cartes"]
+
+
+def test_graphie_reussie_avance_echeance_et_attend_reconnaissance(con, carte, rng):
+    """Une réponse juste en graphie n'est pas ignorée par _fautes_d_accent, et une faute de Bombe sur un mot
+    dont le sens n'a jamais été reconnu ne passe pas avant « mot → sens »."""
+    from datetime import datetime, timedelta, timezone
+    from lem.db import regler_horloge
+    from lem.journal import Evenement, ecrire
+    from lem.memory import scheduler
+    from lem.orthographe import diagnostiquer, enregistrer_faute
+
+    t0 = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
+    regler_horloge(lambda: t0)
+    try:
+        diag = diagnostiquer(con, "acronime")
+        assert diag is not None
+        enregistrer_faute(con, None, "bombe", diag)
+        # Sens jamais reconnu aux Cartes : la graphie n'entre pas en révision « équilibre », seulement en « graphie ».
+        regler_horloge(lambda: t0 + timedelta(days=5))
+        p_eq = PartieCartes(con, params("cartes", nouveaux=0, intention="equilibre"), carte, rng=rng)
+        assert not any(t.exercice == "graphie" and t.entree_id == diag.entree_id for t in p_eq.plan.revisions)
+        p_gr = PartieCartes(con, params("cartes", nouveaux=0, intention="graphie"), carte, rng=rng)
+        assert any(t.exercice == "graphie" and t.entree_id == diag.entree_id for t in p_gr.plan.revisions)
+
+        # Une fois le sens reconnu, la graphie revient et une bonne réponse repousse bien son échéance.
+        ecrire(con, None, Evenement("cartes", "reponse", entree_id=diag.entree_id, trace="recep",
+                                    reponse="sigle prononcé comme un mot", correct=True, note_auto=3))
+        scheduler.reconstruire(con, [diag.entree_id])
+        p_eq2 = PartieCartes(con, params("cartes", nouveaux=0, intention="equilibre"), carte, rng=rng)
+        it = p_eq2.suivant()
+        assert it is not None and it.exercice == "graphie" and it.entree_id == diag.entree_id
+        res = p_eq2.repondre(it, it.forme, 1500)
+        p_eq2.valider(res, None)
+        ech = scheduler.echeance(con, diag.entree_id, 0, "ortho")
+        assert ech is not None and ech > t0 + timedelta(days=5)
+        assert not any(t.entree_id == diag.entree_id for t in p_eq2.plan.attente)
+    finally:
+        regler_horloge(None)
+
+
+def test_cartes_revelation_limite_les_definitions(con, carte, rng):
+    """La révélation d'une carte affiche au plus 2 sens (le sens visé d'abord)."""
+    eid_ = con.execute("SELECT id FROM entree WHERE forme = 'acronyme'").fetchone()[0]
+    for rang in range(2, 6):
+        con.execute("INSERT INTO sens(entree_id, rang, definition) VALUES(?, ?, ?)", (eid_, rang, f"Sens {rang}."))
+    partie = PartieCartes(con, params("cartes", nouveaux=0), carte, rng=rng)
+    it = partie._item("recep", eid_)
+    res = partie.repondre(it, "je ne sais pas", 1000)
+    assert 1 <= len(res.sens) <= 2
+
+
+def test_cartes_priorisent_mots_bombe_peu_connus(con, carte, rng):
+    """Les mots vus par /d ou tapés une 1re fois à la Bombe avec un faible a priori reviennent via FSRS aux Cartes,
+    mais pas un mot évident comme « trempe » (p_prior élevé)."""
+    from lem.definitions import resume_etymologie
+    from lem.lexique import Lexique
+    from lem.memory import scheduler
+
+    lex = Lexique(con)
+    b = PartieBombe(con, params("bombe", mode="standard", solutions_min=1), carte, rng=rng, lexique=lex)
+    id_rare = con.execute("SELECT id FROM entree WHERE forme = 'thuriféraire'").fetchone()[0]
+    id_evident = con.execute("SELECT id FROM entree WHERE forme = 'trempe'").fetchone()[0]
+    con.execute("UPDATE connaissance SET p_prior = 0.12, p_connu = 0.2, n_obs = 0 WHERE entree_id = ?", (id_rare,))
+    con.execute("UPDATE connaissance SET p_prior = 0.98, p_connu = 0.98, n_obs = 0 WHERE entree_id = ?", (id_evident,))
+    carte._prior[id_rare] = 0.12
+    carte._prior[id_evident] = 0.98
+
+    # /d sur « tre » donne ou montre trempe (évident) ; sur « thu » donne thuriféraire (peu connu).
+    b.noter_aides([id_evident], ["trempe"])
+    b.invite.suite = "tre"
+    assert b.repondre("trempe", 800).aide
+    b.noter_aides([id_rare], ["thuriféraire"])
+    b.invite.suite = "thu"
+    assert b.repondre("thuriferaire", 800).aide     # même sans accent : reconnu comme aidé par son entrée
+
+    # La trace FSRS recep due est créée pour thuriféraire, mais pas pour trempe.
+    dues = {t.entree_id for t in scheduler.dues(con, traces=("recep",))}
+    assert id_rare in dues and id_evident not in dues
+
+    partie = PartieCartes(con, params("cartes", nouveaux=5), carte, rng=rng, lexique=lex)
+    it = partie.suivant()
+    assert it is not None and it.entree_id == id_rare and it.exercice == "recep"
+
+    # Retour 3 s après /d (r = retenu, n = non retenu) + définition courte et étymologie.
+    b.invite.suite = "mit"
+    ind = b.indice()
+    assert ind is not None and "definition" in ind and "etymologie" in ind
+    con.execute("UPDATE connaissance SET p_prior = 0.2 WHERE entree_id = ?", (ind["entree_id"],))
+    carte._prior[ind["entree_id"]] = 0.2
+    b.noter_retour_aide(ind["entree_id"], retenu=False)
+    ech = scheduler.echeance(con, ind["entree_id"], ind["sens_id"], "recep")
+    assert ech is not None
+
+    # Étymologie courte en alphabet latin pour un composé savant (orthoédrique).
+    e_ortho = con.execute("INSERT INTO entree(forme, pos, type) VALUES('orthoédrique', 'adj', 'mot')").lastrowid
+    etym = resume_etymologie(con, e_ortho)
+    assert "ortho-" in etym and "orthos" in etym and "hedra" in etym
+
+    # Dégradation explicite (Ctrl+N / /n) : même un mot présumé acquis (#5fd75f) passe en cours (#87d7d7) et entre dans FSRS.
+    from lem.tui.app import ETATS, couleur_mot
+
+    assert couleur_mot(con, id_evident, carte) == ETATS["acquis"][0]
+    info = scheduler.degrader(con, id_evident, carte=carte, jeu="bombe")
+    assert info is not None and info["mot"] == "trempe"
+    assert couleur_mot(con, id_evident, carte) == ETATS["en_cours"][0]
+    assert id_evident in {t.entree_id for t in scheduler.dues(con, traces=("recep",))}
+
+
+

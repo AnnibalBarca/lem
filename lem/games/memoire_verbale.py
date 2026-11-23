@@ -42,12 +42,13 @@ MEMOIRE = enregistrer(Jeu(
     description="Human Benchmark : entraînement fidèle au test (mots courants, encodage en images qui "
                 "s'efface), ou élucubrations lexicales qui t'apprennent des mots.",
     params=[
-        Param("mode", "Mode", str, "entrainement", "entrainement = comme le test · elucubrations = mots étranges",
-              choix=("entrainement", "elucubrations")),
+        Param("mode", "Mode", str, "entrainement",
+              "entrainement = comme le test · elucubrations = mots étranges · imagerie = invite « image ? »",
+              choix=("entrainement", "elucubrations", "imagerie")),
         Param("locutions", "Locutions", bool, False, "élucubrations : aussi les entrées de plusieurs mots"),
         Param("vies", "Vies", int, 3, "", 1, 10),
-        Param("encodage", "Invite « image ? »", str, "estompe",
-              "entraînement : libre = jamais · guide = toujours · estompe = s'efface quand ton record monte",
+        Param("encodage", "Invite « image ? »", str, "libre",
+              "imagerie / entraînement : libre = jamais · guide = toujours · estompe = s'efface quand ton record monte",
               choix=("libre", "guide", "estompe")),
         Param("presque_acquis", "Part de mots presque acquis", float, 0.25, "élucubrations, 0 à 1", 0, 1),
         Param("etrangete", "Niveau d'étrangeté", float, 0.7, "élucubrations : 0 = mots rares, 1 = les plus abscons",
@@ -134,7 +135,10 @@ class PartieMemoire:
         self.guides = 0
         self.historique = scores(con, self.mode)
         self.record = max(self.historique, default=0)
-        self.max_guides = guides_par_partie(self.record, params.get("encodage", "estompe"))
+        enc = params.get("encodage", "libre")
+        if self.mode == "imagerie" and enc == "libre":
+            enc = "estompe"
+        self.max_guides = guides_par_partie(self.record, enc)
         self.propres: list = []        # élucubrations : noms propres, tirés à part (plafond `noms_propres`)
         self._construire_vivier()
 
@@ -143,7 +147,7 @@ class PartieMemoire:
         return self.params.get("mode") or "elucubrations"
 
     def _construire_vivier(self) -> None:
-        if self.mode == "entrainement":
+        if self.mode in ("entrainement", "imagerie"):
             lo, hi = ZIPF_COURANTS
             rows = self.con.execute(
                 """SELECT id, forme FROM entree WHERE type = 'mot' AND zipf BETWEEN ? AND ?
@@ -179,7 +183,7 @@ class PartieMemoire:
             self.formes[r["id"]] = r["forme"]
 
     def _imager(self, entree_id: int) -> bool:
-        if self.mode == "entrainement":
+        if self.mode in ("entrainement", "imagerie"):
             return False
         mode = self.params["imagerie"]
         if mode == "toujours":
@@ -204,7 +208,7 @@ class PartieMemoire:
                 source = self.propres
             libres = [r for r in source if r["id"] not in vus] or [r for r in self.etranges if r["id"] not in vus]
             r = self.rng.choice(libres)
-            guider = self.mode == "entrainement" and self.guides < self.max_guides
+            guider = self.mode in ("entrainement", "imagerie") and self.guides < self.max_guides
             self.tour = Tour(r["id"], r["forme"], False, True, self._imager(r["id"]), guider)
         self.dernier = self.tour.entree_id
         return self.tour

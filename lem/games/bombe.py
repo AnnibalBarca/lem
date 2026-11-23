@@ -34,10 +34,12 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from lem.confusables import IndexFormel
+from lem.definitions import resume_etymologie
 from lem.games.base import PARAMS_FILTRES, Jeu, Param, enregistrer, filtres_depuis
 from lem.games.pool import selectionner
 from lem.journal import Evenement, Frappe, ecrire, nettoyer_saisie
-from lem.memory.knowledge import POIDS_PRODUIT, CarteConnaissance, score_apprentissage
+from lem.memory import scheduler
+from lem.memory.knowledge import POIDS_PRODUIT, Y_PAR_NOTE, CarteConnaissance, score_apprentissage
 from lem.orthographe import Diagnostic, accents_manquants, accents_tolerants, diagnostiquer, enregistrer_faute
 from lem.similarite import Comparaison, Proximite, comparer, enregistrer_confusion
 from lem.texte import normaliser
@@ -54,8 +56,8 @@ BOMBE = enregistrer(Jeu(
     accroche="Une suite de lettres. Un mot. Avant l'explosion.",
     description="JKLM branché sur ta mémoire : répétition intelligente, cibles floues, confusables.",
     params=[
-        Param("mode", "Mode", str, "standard", "standard | conscient | confusables",
-              choix=("standard", "conscient", "confusables"), anciens=ANCIENS_MODES),
+        Param("mode", "Mode", str, "standard", "standard | conscient | confusables | synonymes",
+              choix=("standard", "conscient", "confusables", "synonymes"), anciens=ANCIENS_MODES),
         *PARAMS_FILTRES,
         Param("long_min", "Lettres min", int, 2, "longueur minimale de la suite", 2, 10),
         Param("long_max", "Lettres max", int, 3, "longueur maximale de la suite", 2, 12),
@@ -119,7 +121,7 @@ class _Valides:
 
 @dataclass
 class Invite:
-    suite: str                      # normalisée
+    suite: str                      # normalisée (ou mot demandé en mode synonymes)
     cible_id: int | None = None
     cible_forme: str | None = None
     repetitions: int = 0            # retours restants si la cible est ratée
@@ -127,6 +129,9 @@ class Invite:
     n_solutions: int = 0
     duree: float = 10.0
     donnes: list[str] = field(default_factory=list)   # mots donnés sur cette cible
+    est_synonyme: bool = False
+    cible_pos: str = ""
+    cible_zipf: float = 0.0
 
 
 @dataclass
@@ -172,9 +177,15 @@ class PartieBombe:
         self.suites = None                       # lem.suites.IndexSuites, à la demande (mode standard sans filtre)
         self._suites_cle = None
         self.aides: set[str] = set()             # mots donnés par /d : ne comptent pas comme trouvés
+        self.aides_ids: set[int] = set()         # entrées données ou montrées par /d
         self._univers()
         self.reconfigurer()
         self.invite: Invite = self.nouvelle_invite()
+
+    def noter_aides(self, eids, formes=()) -> None:
+        """Marque comme aidés les mots montrés par /d (seul ou avec argument)."""
+        self.aides_ids.update(int(i) for i in eids if i is not None)
+        self.aides.update(f.lower() for f in formes if f)
 
     # -- données ------------------------------------------------------------
     def _exclus(self) -> tuple[str, ...]:
@@ -217,6 +228,29 @@ class PartieBombe:
             """SELECT entree_id FROM trace_etat WHERE trace IN ('recep', 'prod')
                GROUP BY entree_id ORDER BY MIN(due)""") if r[0] in cibles]
         self.index = IndexFormel(self.con, set(self.vivier), self.lex) if self.params["mode"] == "confusables" else None
+        self._graphe_syn: dict[int, set[int]] = {}
+        self._cibles_syn: list[sqlite3.Row] = []
+        if self.params["mode"] == "synonymes":
+            from lem.games.synonymes import (
+                REGISTRES_FAMILIERS,
+                REGISTRES_SOUTENUS,
+                charger_graphe_synonymes,
+                registres_principaux,
+            )
+
+            self._graphe_syn = charger_graphe_synonymes(self.con)
+            regs = registres_principaux(self.con)
+            stricts, tous = [], []
+            for r in self.vivier.values():
+                syns = self._graphe_syn.get(r["id"])
+                if not syns or len(syns) < 2:
+                    continue
+                tous.append(r)
+                reg = regs.get(r["id"], "")
+                z = r["zipf"] or 0.0
+                if reg not in REGISTRES_FAMILIERS and (reg in REGISTRES_SOUTENUS or 1.8 <= z <= 4.7):
+                    stricts.append(r)
+            self._cibles_syn = stricts if len(stricts) >= 10 else tous
 
     def solutions(self, suite: str) -> tuple[int, float]:
         """(nombre de mots du vivier contenant la suite, K = Σ P(connu))."""
@@ -329,11 +363,34 @@ class PartieBombe:
         return min(subs, key=lambda s: (self.n_solutions(s) if communs is None else -sum(
             s in normaliser(c) for c in communs), self.rng.random()))
 
+    def _invite_synonyme(self) -> Invite:
+        cands = [r for r in self._cibles_syn if r["id"] not in self.cibles_vues]
+        if not cands and self._cibles_syn:
+            self.cibles_vues.clear()
+            cands = list(self._cibles_syn)
+        if not cands:
+            return self._invite_libre()
+        ech = self.rng.sample(cands, min(len(cands), 200))
+        cible = self.rng.choice(ech)
+        cid = cible["id"]
+        self.cibles_vues.add(cid)
+        syns = self._graphe_syn.get(cid, set())
+        row = self.con.execute("SELECT pos, zipf FROM entree WHERE id = ?", (cid,)).fetchone()
+        pos = (row["pos"] or "") if row else ""
+        z = (row["zipf"] or 0.0) if row else 0.0
+        inv = Invite(cible["forme"], cid, cible["forme"], 0, float(len(syns)), len(syns), self._duree(),
+                     est_synonyme=True, cible_pos=pos, cible_zipf=z)
+        ecrire(self.con, self.session_id, Evenement(
+            "bombe", "stimulus", entree_id=cid, data={"mot": cible["forme"], "n": len(syns), "mode": "synonymes"}))
+        return inv
+
     def nouvelle_invite(self) -> Invite:
         mode = self.params["mode"]
         self.n_invites += 1
         if mode == "standard":
             return self._invite_libre()
+        if mode == "synonymes":
+            return self._invite_synonyme()
         retour = next((r for r in self.retours if r[0] <= self.n_invites and r[1] in self.vivier), None)
         if retour is not None:
             self.retours.remove(retour)
@@ -417,23 +474,94 @@ class PartieBombe:
         cands = [f for x, _, _ in proches for f in self.lex.formes_de_norme(x) if self.lex.entrees(f, exclus)]
         return diagnostiquer(self.con, texte, self.invite.cible_id, list(dict.fromkeys(cands)))
 
+    def _repondre_synonyme(self, texte: str, latence_ms: int, frappe: Frappe | None = None) -> Retour:
+        from lem.games.synonymes import MARGE_UPGRADE_ZIPF, SEUIL_SEM_DEFAUT
+
+        inv = self.invite
+        cle, ids = self._valider(texte)
+        base = {"mode": "synonymes", "cible": inv.cible_forme, "n": inv.n_solutions, "fsrs": False}
+        if cle and cle != texte.strip().lower():
+            base["accents_manquants"] = cle
+        aide = bool(cle) and (cle in self.aides or bool(ids & self.aides_ids))
+        if aide:
+            base["aide"] = True
+        if not cle or not ids:
+            if not (frappe and frappe.dictee):
+                syns = self._graphe_syn.get(inv.cible_id, set())
+                cands = [r[0] for r in self.con.execute(
+                    f"SELECT forme FROM entree WHERE id IN ({', '.join('?' * len(syns))})", list(syns)
+                )] if syns else []
+                diag = diagnostiquer(self.con, texte, None, cands or None)
+                if diag:
+                    enregistrer_faute(self.con, self.session_id, "bombe", diag, latence_ms, frappe)
+                    return Retour(False, "graphie", entree_id=diag.entree_id, graphie=diag)
+            ecrire(self.con, self.session_id, Evenement("bombe", "tentative", entree_id=inv.cible_id, reponse=texte,
+                                                        correct=False, latence_ms=latence_ms,
+                                                        frappe=frappe or Frappe(), data={**base, "raison": "mot inconnu"}))
+            return Retour(False, "mot inconnu")
+        if cle in self.utilises:
+            return Retour(False, "déjà utilisé")
+        if inv.cible_id in ids or normaliser(cle) == normaliser(inv.cible_forme or ""):
+            return Retour(False, "c'est le mot demandé")
+
+        syns = self._graphe_syn.get(inv.cible_id, set())
+        direct = next((i for i in ids if i in syns), None)
+        mode_ok, eid, sim = "", next(iter(ids)), None
+        if direct is not None:
+            eid, mode_ok = direct, "synonyme"
+        elif self.magasin is not None:
+            meilleur = max(((i, self.magasin.sim(inv.cible_id, i)) for i in ids),
+                           key=lambda x: x[1] if x[1] is not None else -1.0)
+            if meilleur[1] is not None and meilleur[1] >= SEUIL_SEM_DEFAUT:
+                eid, sim, mode_ok = meilleur[0], meilleur[1], "proche"
+
+        if not mode_ok:
+            comp = comparer(self.con, inv.cible_id, eid, self.magasin)
+            if comp.proximite in (Proximite.JUMEAU, Proximite.FORME, Proximite.SENS):
+                enregistrer_confusion(self.con, inv.cible_id, eid, 0.5)
+            ecrire(self.con, self.session_id, Evenement(
+                "bombe", "tentative", entree_id=inv.cible_id, reponse=cle, correct=False, latence_ms=latence_ms,
+                frappe=frappe or Frappe(), data={**base, "donne_id": eid, "proximite": comp.proximite.value}))
+            return Retour(False, comp.message or "pas un synonyme", entree_id=eid,
+                          proximite=comp.proximite, comparaison=comp)
+
+        self.utilises.add(cle)
+        self.latences.append(latence_ms)
+        self.historique.append(True)
+        z = self.con.execute("SELECT zipf FROM entree WHERE id = ?", (eid,)).fetchone()["zipf"] or 0.0
+        upgrade = bool(inv.cible_zipf > 0 and z > 0 and z < inv.cible_zipf - MARGE_UPGRADE_ZIPF)
+        points = 1.0 + max(0.0, 4.0 - z) + (2.0 if upgrade else 0.0)
+        vie = self._regain(cle, z)
+        msg = "synonyme soutenu !" if upgrade else ("proche synonyme" if mode_ok == "proche" else "")
+        ev = ecrire(self.con, self.session_id, Evenement(
+            "bombe", "reponse", entree_id=eid, trace="prod", reponse=cle, correct=True, latence_ms=latence_ms,
+            frappe=frappe or Frappe(),
+            data={**base, "cible_id": inv.cible_id, "type_ok": mode_ok,
+                  "sim": None if sim is None else round(sim, 3), "upgrade": upgrade}))
+        if not aide:
+            self.carte.observer(eid, 1.0, poids=POIDS_PRODUIT, source="bombe:synonyme", evenement_id=ev, propager=False)
+            self.carte.observer(inv.cible_id, 0.9, poids=0.5, source="bombe:synonyme:cible", evenement_id=ev, propager=False)
+        retour = Retour(True, msg, eid, points=points, vie_gagnee=vie, forme=cle, aide=aide)
+        retour.trouvaille = trouvailles(self.con, eid)
+        self._adapter()
+        self.invite = self.nouvelle_invite()
+        self.score += retour.points
+        return retour
+
     def repondre(self, texte: str, latence_ms: int, frappe: Frappe | None = None) -> Retour:
         texte = nettoyer_saisie(texte)
         inv = self.invite
+        if inv.est_synonyme:
+            return self._repondre_synonyme(texte, latence_ms, frappe)
         cle, ids = self._valider(texte)
         suite_ok = inv.suite in normaliser(texte)
         base = {"suite": inv.suite, "cible": inv.cible_forme, "k": round(inv.k, 2), "n": inv.n_solutions,
                 "repetitions_restantes": inv.repetitions, "fsrs": False}
         if cle and cle != texte.strip().lower():
             base["accents_manquants"] = cle
-        aide = bool(cle) and cle in self.aides
+        aide = bool(cle) and (cle in self.aides or bool(ids & self.aides_ids))
         if aide:
             base["aide"] = True                  # donné par /d : un mot vu, pas un mot trouvé
-        if cle and suite_ok and not ids and cle not in self.utilises and not (frappe and frappe.dictee):
-            diag = self._diagnostic(texte)
-            if diag:
-                enregistrer_faute(self.con, self.session_id, "bombe", diag, latence_ms, frappe)
-                return Retour(False, "graphie", diag.entree_id, graphie=diag)
         if not cle or not suite_ok or not ids or cle in self.utilises:
             raison = ("ne contient pas « %s »" % inv.suite.upper() if not suite_ok
                       else "déjà utilisé" if cle in self.utilises else "mot inconnu")
@@ -444,7 +572,7 @@ class PartieBombe:
 
         self.utilises.add(cle)
         self.latences.append(latence_ms)
-        eid = self._entree_preferee(ids, inv.cible_id)
+        eid = self._entree_preferee(ids, inv.cible_id, cle)
         z = self.con.execute("SELECT zipf FROM entree WHERE id = ?", (eid,)).fetchone()["zipf"] or 0.0
         points = 1.0 + max(0.0, 4.0 - z)
         vie = self._regain(cle, z)
@@ -480,18 +608,49 @@ class PartieBombe:
                                                              frappe=frappe or Frappe(), data=data))
             # Sans propagation : on ne tape que des mots qu'on connaît (biais de sélection, cf. memory/migration.py).
             if not aide:                         # un mot donné par /d n'est pas une preuve de vocabulaire actif
-                self.carte.observer(eid, 1.0, poids=POIDS_PRODUIT, source="bombe:spontane", evenement_id=ev, propager=False)
+                poids = 1.0 if (self.carte._prior.get(eid, 0.5) < SEUIL_CONNU_PRIOR and self.carte.n_obs(eid) == 0) else POIDS_PRODUIT
+                self.carte.observer(eid, 1.0, poids=poids, source="bombe:spontane", evenement_id=ev, propager=False)
             retour.revelation = self._apres_echec_cible(texte)
         retour.trouvaille = trouvailles(self.con, eid)
+        prior = self.carte._prior.get(eid, 0.5)
+        if trace_existe or (aide and prior < 0.65) or (not aide and retour.trouvaille["n"] <= 1 and prior < SEUIL_CONNU_PRIOR):
+            scheduler.reconstruire(self.con, [eid])
         self.score += retour.points
         return retour
 
     def indice(self) -> dict | None:
-        """/d : un mot qui contient la suite et que tu peux sortir. D'abord un mot que tu connais (P(connu) ≥ 0,6),
-        le plus long jusqu'à 12 lettres (il rapporte le plus), parmi les formes en usage ; sinon le plus probable. Un mot que tu ne
-        connais pas est noté « vu » au journal (événement `indice`) : il compte comme rencontré, pas comme su.
+        """/d : un mot qui contient la suite et que tu peux sortir. D'abord un mot utile à découvrir ou consolider,
+        sinon un mot que tu connais. Un mot encore fragile (P(connu) < 0,6 ou sans preuve hors mots évidents)
+        est noté « vu » au journal (événement `indice`) : les Cartes le reprendront en priorité.
         Un mot donné ne l'est qu'une fois. None s'il n'y a rien à proposer."""
         suite, exclus = self.invite.suite, self._exclus()
+        if self.invite.est_synonyme and self.invite.cible_id is not None:
+            syns = [i for i in self._graphe_syn.get(self.invite.cible_id, set()) if i not in self.aides_ids]
+            if not syns:
+                return None
+            rows = self.con.execute(
+                f"SELECT id, forme, COALESCE(zipf, 0) AS zipf FROM entree WHERE id IN ({', '.join('?' * len(syns))})",
+                syns,
+            ).fetchall()
+            cands = [r for r in rows if r["forme"].lower() not in self.utilises and r["forme"].lower() not in self.aides]
+            if not cands:
+                return None
+            choisi = max(cands, key=lambda r: (r["zipf"], -len(r["forme"])))
+            eid, mot = choisi["id"], choisi["forme"]
+            pm = self.carte.p(eid)
+            self.noter_aides([eid], [mot])
+            s = self.con.execute(
+                "SELECT id, COALESCE(definition_precise, definition) AS def FROM sens WHERE entree_id = ? AND definition != '' ORDER BY rang LIMIT 1",
+                (eid,),
+            ).fetchone()
+            defi = " ".join((s["def"] if s else "").split())
+            sens_id = s["id"] if s else 0
+            etym = resume_etymologie(self.con, eid)
+            ecrire(self.con, self.session_id, Evenement("bombe", "indice", entree_id=eid, sens_id=sens_id or None, data={
+                "mode": "synonymes", "cible": self.invite.cible_forme, "mot": mot, "p": round(pm, 3),
+                "connu": pm >= SEUIL_CONNU, "vu": pm < SEUIL_CONNU}))
+            return {"mot": mot, "entree_id": eid, "sens_id": sens_id, "p": pm, "connu": pm >= SEUIL_CONNU,
+                    "definition": defi, "etymologie": etym}
         normes = self.lex.normes_contenant(suite, range(max(2, len(suite)), 24))
         if len(normes) > 3000:
             normes = self.rng.sample(normes, 3000)
@@ -500,28 +659,79 @@ class PartieBombe:
         cands: list[tuple[str, tuple[int, ...], float]] = []
         for x in normes:
             for f in self.lex.formes_de_norme(x):
-                if f not in self.utilises and f not in self.aides and f.isalpha():
-                    ids = self.lex.entrees(f, exclus)
+                if f not in self.utilises and f not in self.aides and f.isalpha() and len(f) >= 2:
+                    ids = tuple(i for i in self.lex.entrees(f, exclus) if i not in self.aides_ids)
                     if ids:
-                        cands.append((f, ids, zipf_frequency(f, "fr")))
+                        ids_v = tuple(i for i in ids if i in self.vivier)
+                        cands.append((f, ids_v or ids, zipf_frequency(f, "fr")))
         if not cands:
             return None
+        viv = [c for c in cands if any(i in self.vivier for i in c[1])]
+        cands = viv or cands
         usuels = [c for c in cands if c[2] > 0]          # des formes en usage, pas « becquetassions »
         cands = usuels or cands
         tous = list({i for _, ids, _ in cands for i in ids})
         p = dict(zip(tous, self.carte.p_de(tous)))
+        priors = {i: (pr, n_obs) for i, pr, n_obs in self._priors(tous)}
         # « Connu » demande plus qu'une probabilité qui monte avec tes réponses sur d'autres mots : soit l'a priori
-        # de fréquence suffit (mot courant), soit tu as une preuve sur ce mot-là (la carte est parfois généreuse).
-        solide = {i: (pr >= SEUIL_CONNU_PRIOR or n_obs > 0) for i, pr, n_obs in self._priors(tous)}
-        p = {i: (v if solide.get(i, False) else min(v, SEUIL_CONNU - 0.01)) for i, v in p.items()}
-        scores = [(f, max(ids, key=lambda i: p[i]), max(p[i] for i in ids), z) for f, ids, z in cands]
+        # de fréquence suffit (mot évident, ≥ 0,6), soit tu as une preuve directe sur ce mot-là.
+        solide = {i: (pr >= SEUIL_CONNU or n_obs > 0) for i, (pr, n_obs) in priors.items()}
+        p = {i: (v if solide.get(i, False) else min(v, priors.get(i, (0.0, 0))[0], SEUIL_CONNU - 0.01))
+             for i, v in p.items()}
+        scores = []
+        for f, ids, z in cands:
+            eid = max(ids, key=lambda i: (i in self.vivier and self.vivier[i]["forme"].lower() == f, p[i]))
+            est_lemme = eid in self.vivier and self.vivier[eid]["forme"].lower() == f
+            scores.append((f, eid, max(p[i] for i in ids), z, est_lemme))
+        cibles = [s for s in scores if s[2] < SEUIL_CONNU and priors.get(s[1], (0.0, 0))[0] >= 0.10 and s[3] >= 1.5]
         connus = [s for s in scores if s[2] >= SEUIL_CONNU]
-        mot, eid, pm, _ = (max(connus, key=lambda s: (min(len(s[0]), 12), s[3])) if connus
-                           else max(scores, key=lambda s: (s[2], s[3])))
-        self.aides.add(mot)
-        ecrire(self.con, self.session_id, Evenement("bombe", "indice", entree_id=eid, data={
+        if cibles:
+            mot, eid, pm, _, _ = max(cibles, key=lambda s: (s[4], s[2], s[3]))
+        elif connus:
+            mot, eid, pm, _, _ = max(connus, key=lambda s: (s[4], min(len(s[0]), 12), s[3]))
+        else:
+            mot, eid, pm, _, _ = max(scores, key=lambda s: (s[4], s[2], s[3]))
+        self.noter_aides([eid], [mot])
+        s = self.con.execute(
+            "SELECT id, COALESCE(definition_precise, definition) AS def FROM sens WHERE entree_id = ? AND definition != '' ORDER BY rang LIMIT 1",
+            (eid,),
+        ).fetchone()
+        defi = " ".join((s["def"] if s else "").split())
+        sens_id = s["id"] if s else 0
+        etym = resume_etymologie(self.con, eid)
+        ecrire(self.con, self.session_id, Evenement("bombe", "indice", entree_id=eid, sens_id=sens_id or None, data={
             "suite": suite, "mot": mot, "p": round(pm, 3), "connu": pm >= SEUIL_CONNU, "vu": pm < SEUIL_CONNU}))
-        return {"mot": mot, "entree_id": eid, "p": pm, "connu": pm >= SEUIL_CONNU}
+        return {"mot": mot, "entree_id": eid, "sens_id": sens_id, "p": pm, "connu": pm >= SEUIL_CONNU,
+                "definition": defi, "etymologie": etym}
+
+    def noter_retour_aide(self, eid: int, retenu: bool, avancer: bool = True, explicite: bool = False) -> tuple[str, str] | None:
+        """Après /d : enregistre si tu avais le mot sur le bout de la langue (retenu=True, touche r)
+        ou non (retenu=False, touche n ou expiration des 3 s), met à jour la carte et FSRS, et passe à la suite.
+        Si `explicite` est vrai (touche n appuyée), même un mot présumé connu est dégradé et mis à l'étude."""
+        s = self.con.execute(
+            "SELECT id FROM sens WHERE entree_id = ? AND definition != '' ORDER BY rang LIMIT 1", (eid,)
+        ).fetchone()
+        sens_id = s["id"] if s else None
+        prior = self.carte._prior.get(eid, 0.5)
+        if not retenu and (prior < 0.75 or explicite):
+            ev = ecrire(self.con, self.session_id, Evenement(
+                "bombe", "reponse", entree_id=eid, sens_id=sens_id, trace="recep", reponse="",
+                correct=False, note_auto=1, data={"role": "sonde", "aide": "non_retenu", "fsrs": True}))
+            self.carte.observer(eid, Y_PAR_NOTE[1], poids=1.5, source="bombe:aide:non",
+                                evenement_id=ev, depuis_note=True, propager=True)
+            scheduler.reconstruire(self.con, [eid])
+        elif retenu and (prior < 0.65 or explicite):
+            ev = ecrire(self.con, self.session_id, Evenement(
+                "bombe", "reponse", entree_id=eid, sens_id=sens_id, trace="recep", reponse="",
+                correct=True, note_auto=2, data={"role": "sonde", "aide": "retenu", "fsrs": True}))
+            self.carte.observer(eid, Y_PAR_NOTE[2], poids=1.0, source="bombe:aide:retenu",
+                                evenement_id=ev, depuis_note=True, propager=False)
+            scheduler.reconstruire(self.con, [eid])
+        elif prior < 0.65:
+            scheduler.reconstruire(self.con, [eid])
+        if avancer:
+            return self._apres_echec_cible(None)
+        return None
 
     def _priors(self, ids: list[int]):
         for a in range(0, len(ids), 900):
@@ -536,6 +746,23 @@ class PartieBombe:
         ecrire(self.con, self.session_id, Evenement("bombe", "explosion", entree_id=inv.cible_id,
                                                     data={"suite": inv.suite, "k": round(inv.k, 2), "n": inv.n_solutions}))
         r = Retour(False, "BOUM")
+        if inv.est_synonyme and inv.cible_id is not None:
+            syns = list(self._graphe_syn.get(inv.cible_id, set()))
+            ex = [x[0] for x in self.con.execute(
+                f"SELECT forme FROM entree WHERE id IN ({', '.join('?' * len(syns))}) ORDER BY COALESCE(zipf, 0) DESC LIMIT 4",
+                syns,
+            )] if syns else []
+            d = self.con.execute("SELECT definition FROM sens WHERE entree_id = ? ORDER BY rang LIMIT 1",
+                                 (inv.cible_id,)).fetchone()
+            resume = ", ".join(dict.fromkeys(ex))
+            if d and d["definition"]:
+                resume = f"{resume} ({d['definition'][:75]})" if resume else d["definition"]
+            r.revelation = (inv.cible_forme, resume)
+            self.carte.observer(inv.cible_id, 0.35, poids=0.4, source="bombe:synonyme:boum", propager=False)
+            self.historique.append(False)
+            self._adapter()
+            self.invite = self.nouvelle_invite()
+            return r
         r.revelation = self._apres_echec_cible(None)
         return r
 
@@ -544,10 +771,14 @@ class PartieBombe:
         return self.vies <= 0
 
     # -- internes ------------------------------------------------------------
-    def _entree_preferee(self, ids: set[int], cible: int | None) -> int:
+    def _entree_preferee(self, ids: set[int], cible: int | None, cle: str = "") -> int:
         if cible in ids:
             return cible
-        return min(ids, key=lambda i: -(self.vivier[i]["p_connu"] if i in self.vivier else 0))
+        return min(ids, key=lambda i: (
+            i not in self.aides_ids,
+            not (i in self.vivier and self.vivier[i]["forme"].lower() == cle),
+            -(self.vivier[i]["p_connu"] if i in self.vivier else 0),
+        ))
 
     def _regain(self, cle: str, zipf: float) -> bool:
         mode = self.params["regain"]

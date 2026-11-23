@@ -4,7 +4,7 @@ Quatre usages seulement :
   * l'état de la mémoire (froid → chaud : inconnu → acquis) ;
   * la proximité entre deux mots (rouge, magenta, orange, violet) ;
   * la graphie : jaune vif, réservé aux fautes d'orthographe (lem.orthographe.GRAPHIE) ;
-  * les catégories (domaines), avec une teinte stable par nom.
+  * les racines et l'étymologie (vert sauge) et les catégories (domaines).
 """
 
 from __future__ import annotations
@@ -18,6 +18,8 @@ from lem.similarite import Proximite
 BLANC = "#f2f2f2"
 GRIS = "#8a8a8a"
 SOMBRE = "#4a4a4a"
+ETYMOLOGIE = "#87af87"
+AIDE_TIMER = "#d7af5f"
 
 ETATS = {
     "non_explore": ("#4a4a4a", "non exploré"),
@@ -39,22 +41,51 @@ PROXIMITES = {
 PALETTE_CATEGORIES = ["#87afd7", "#d7af87", "#87d7af", "#d787af", "#afafd7", "#d7d787", "#87d7d7", "#d7a0a0"]
 
 
-def etat_de(p: float | None, n_obs: int = 0, en_cours: bool = False, stabilite: float | None = None) -> str:
+def etat_de(p: float | None, n_obs: int = 0, en_cours: bool = False, stabilite: float | None = None,
+            statut: str | None = None, p_prior: float | None = None) -> str:
+    if statut in ("connu_sonde", "verifie") or (stabilite is not None and stabilite > 30):
+        return "acquis"
     if stabilite is not None and 3 <= stabilite <= 30:
         return "presque"
     if en_cours:
         return "en_cours"
     if n_obs == 0:
-        if p is not None and p >= 0.85:
+        pr = p_prior if p_prior is not None else p
+        if (pr is not None and pr >= 0.60) or (p is not None and p >= 0.80):
             return "acquis"
+        if (pr is not None and pr >= 0.45) or (p is not None and p >= 0.65):
+            return "presque"
         return "inconnu" if p is not None and p <= 0.15 else "non_explore"
     if p is None or p < 0.3:
         return "inconnu"
-    if p < 0.75:
+    if p < 0.65:
         return "flou"
-    if p < 0.9:
+    if p < 0.85:
         return "presque"
     return "acquis"
+
+
+def couleur_mot(con, entree_id: int | None, carte=None) -> str:
+    """Couleur sémantique d'un mot selon son état en mémoire (acquis, presque, en cours, flou, inconnu)."""
+    if not entree_id:
+        return BLANC
+    row = con.execute(
+        """SELECT c.p_connu, c.p_prior, c.n_obs, t.stabilite, t.statut, t.entree_id IS NOT NULL AS en_cours
+           FROM connaissance c
+           LEFT JOIN (
+               SELECT entree_id, MAX(stabilite) AS stabilite, MAX(statut) AS statut
+               FROM trace_etat WHERE entree_id = ? AND trace IN ('recep', 'prod')
+           ) t ON t.entree_id = c.entree_id
+           WHERE c.entree_id = ?""",
+        (entree_id, entree_id),
+    ).fetchone()
+    if row is None:
+        p = carte.p(entree_id) if carte is not None else None
+        cle = etat_de(p)
+    else:
+        p = carte.p(entree_id) if carte is not None else row["p_connu"]
+        cle = etat_de(p, row["n_obs"], bool(row["en_cours"]), row["stabilite"], row["statut"], row["p_prior"])
+    return ETATS[cle][0] if cle != "non_explore" else GRIS
 
 
 def couleur_categorie(nom: str) -> str:

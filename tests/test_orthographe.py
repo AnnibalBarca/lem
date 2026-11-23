@@ -53,8 +53,8 @@ def test_aucune_variante_dans_la_bombe(con, carte, rng):
     b = PartieBombe(con, p, carte, rng=rng)
     b.invite.suite = "rif"
     r = b.repondre("turiféraire", 900)
-    assert not r.valide and r.graphie and r.graphie.correcte == "thuriféraire"
-    assert scheduler.dues(con, now() + timedelta(days=1), traces=("ortho",))      # la faute revient (sous un jour)
+    assert not r.valide and r.graphie is None                       # pas de correcteur orthographique à la Bombe
+    assert not scheduler.dues(con, now() + timedelta(days=1), traces=("ortho",))
     assert b.repondre("thuriféraire", 900).valide
 
 

@@ -138,7 +138,7 @@ def _fautes_d_accent(con: sqlite3.Connection, rows) -> set[int]:
     if not get_reglage(con, "accents_tolerants", True):
         return set()
     out: set[int] = set()
-    ortho = [r for r in rows if r["trace"] == "ortho"]
+    ortho = [r for r in rows if r["trace"] == "ortho" and (r["note_auto"] or 0) < 2]
     if not ortho:
         return out
     formes: dict[int, set[str]] = {}
@@ -195,11 +195,63 @@ def reconstruire(con: sqlite3.Connection, entree_ids: list[int] | None = None) -
             card, _ = sched.review_card(card, Rating(note), quand)
             if statut in ("connu_sonde", "verifie") and note == 1:
                 statut = None                       # oublié : il rentre dans le parcours normal
+            if data.get("aide") in ("retour_n", "degrade_manuel") and note == 1:
+                card.due = quand
+                statut = "bombe_decouvert"
         etats[cle] = (card, reps + 1, lapses, statut)
+    _ajouter_decouvertes_bombe(con, entree_ids, etats)
     for (eid, sid, trace), (card, reps, lapses, statut) in etats.items():
         _sauver(con, eid, sid, trace, card, reps, lapses, statut)
     con.commit()
     return len(etats)
+
+
+def _ajouter_decouvertes_bombe(con: sqlite3.Connection, entree_ids: list[int] | None,
+                               etats: dict[tuple[int, int, str], tuple[Card, int, int, str | None]]) -> None:
+    """Crée une trace FSRS `recep` due (statut `bombe_decouvert`) pour les mots rencontrés pour la première fois
+    à la Bombe (p_prior < 0,45) ou demandés via /d (p_prior < 0,65) qui n'ont pas encore de trace aux Cartes."""
+    deja = {eid for eid, _, trace in etats if trace in ("recep", "prod")}
+    filtre, args = "", []
+    if entree_ids:
+        filtre = f"AND ev.entree_id IN ({', '.join('?' * len(entree_ids))})"
+        args = list(entree_ids)
+    rows = con.execute(
+        f"""SELECT ev.entree_id, ev.type, ev.ts, ev.data, COALESCE(c.p_prior, 0.5) AS prior, e.forme, e.type AS etype
+            FROM evenement ev
+            JOIN entree e ON e.id = ev.entree_id
+            LEFT JOIN connaissance c ON c.entree_id = ev.entree_id
+            WHERE ev.jeu = 'bombe' AND ev.entree_id IS NOT NULL
+              AND ((ev.type = 'reponse' AND ev.correct = 1 AND ev.trace = 'prod') OR ev.type = 'indice')
+              {filtre}
+            ORDER BY ev.id DESC LIMIT 600""",
+        args,
+    ).fetchall()
+    if not rows:
+        return
+    cands: dict[int, str] = {}
+    comptes: dict[int, int] = {}
+    for r in rows:
+        eid = r["entree_id"]
+        if r["type"] == "reponse":
+            comptes[eid] = comptes.get(eid, 0) + 1
+    for r in rows:
+        eid = r["entree_id"]
+        if eid in deja or eid in cands:
+            continue
+        forme = r["forme"] or ""
+        if not forme or forme[0].isupper() or r["etype"] in ("nom_propre", "sigle", "expression"):
+            continue
+        prior = r["prior"]
+        aide = r["type"] == "indice" or '"aide":true' in (r["data"] or "").replace(" ", "")
+        if (aide and prior < 0.65) or (r["type"] == "reponse" and prior < 0.45 and comptes.get(eid, 0) <= 2):
+            cands[eid] = r["ts"]
+    for eid, ts in cands.items():
+        s = con.execute(
+            "SELECT id FROM sens WHERE entree_id = ? AND definition != '' ORDER BY rang LIMIT 1", (eid,)
+        ).fetchone()
+        if s is not None:
+            quand = parse_iso(ts)
+            etats[(eid, s["id"], "recep")] = (carte_neuve(eid, s["id"], "recep", quand), 0, 0, "bombe_decouvert")
 
 
 @dataclass
@@ -229,7 +281,7 @@ def dues(con: sqlite3.Connection, quand: datetime | None = None, limite: int = 2
         card = Card.from_json(r["card_json"])
         out.append(TraceDue(r["entree_id"], r["sens_id"], r["trace"], parse_iso(r["due"]),
                             scheds[r["trace"]].get_card_retrievability(card, quand), r["statut"]))
-    out.sort(key=lambda t: t.retrievabilite)
+    out.sort(key=lambda t: (t.retrievabilite, -t.due.timestamp() if t.statut == "bombe_decouvert" else t.due.timestamp()))
     return out[:limite]
 
 
@@ -240,11 +292,15 @@ def echeance(con: sqlite3.Connection, entree_id: int, sens_id: int, trace: str) 
     return parse_iso(row[0]) if row else None
 
 
-def charge(con: sqlite3.Connection, jours: int = 7, quand: datetime | None = None) -> float:
+def charge(con: sqlite3.Connection, jours: int = 7, quand: datetime | None = None,
+           traces: tuple[str, ...] = TRACES) -> float:
     """Révisions attendues par jour sur les `jours` prochains jours (dues comprises)."""
     quand = quand or now()
-    n = con.execute("SELECT COUNT(*) FROM trace_etat WHERE due <= ?",
-                    (iso(quand + timedelta(days=jours)),)).fetchone()[0]
+    n = con.execute(
+        f"""SELECT COUNT(*) FROM trace_etat WHERE due <= ? AND trace IN ({', '.join('?' * len(traces))})
+            AND COALESCE(statut, '') != 'bombe_decouvert'""",
+        (iso(quand + timedelta(days=jours)), *traces),
+    ).fetchone()[0]
     return n / jours
 
 
@@ -257,3 +313,32 @@ def retrievabilite(con: sqlite3.Connection, entree_id: int, sens_id: int, trace:
     if not row:
         return None
     return ordonnanceur(con, trace).get_card_retrievability(Card.from_json(row["card_json"]), quand or now())
+
+
+def degrader(con: sqlite3.Connection, entree_id: int, carte=None, session_id: int | None = None,
+             jeu: str = "bombe") -> dict | None:
+    """Marque explicitement un mot (même présumé acquis) comme « à apprendre » : dégrade sa probabilité dans
+    la carte de connaissance, crée ou remet à zéro sa trace FSRS `recep`, et renvoie sa fiche courte."""
+    from lem.definitions import resume_etymologie
+    from lem.journal import Evenement, ecrire
+    from lem.memory.knowledge import Y_PAR_NOTE, CarteConnaissance
+
+    e = con.execute("SELECT id, forme FROM entree WHERE id = ?", (entree_id,)).fetchone()
+    if e is None:
+        return None
+    s = con.execute(
+        "SELECT id, COALESCE(definition_precise, definition) AS def FROM sens WHERE entree_id = ? AND definition != '' ORDER BY rang LIMIT 1",
+        (entree_id,),
+    ).fetchone()
+    sens_id = s["id"] if s else None
+    defi = " ".join((s["def"] if s else "").split())
+    ev = ecrire(con, session_id, Evenement(
+        jeu, "reponse", entree_id=entree_id, sens_id=sens_id, trace="recep", reponse="",
+        correct=False, note_auto=1, data={"role": "sonde", "aide": "degrade_manuel", "fsrs": True}))
+    if carte is None:
+        carte = CarteConnaissance(con)
+    carte.observer(entree_id, Y_PAR_NOTE[1], poids=1.5, source=f"{jeu}:degrade",
+                   evenement_id=ev, depuis_note=True, propager=True)
+    reconstruire(con, [entree_id])
+    return {"entree_id": entree_id, "mot": e["forme"], "sens_id": sens_id,
+            "definition": defi, "etymologie": resume_etymologie(con, entree_id)}

@@ -97,6 +97,23 @@ def _jeux_entrainement(con: sqlite3.Connection, t: Text, lexique=None) -> None:
         t.append(f"  syllabaire      sub-{r['seuil']} : {r['rares']} suites · {r['vues']} travaillées · ", style=GRIS)
         t.append(f"{r['sures']} sûres", style=BLANC)
         t.append(f" · {r['dues']} à revoir\n", style=GRIS)
+    from lem.games.synonymes import resume as resume_syn
+    from lem.games.labog import resume as resume_labog
+
+    rs = resume_syn(con)
+    if rs["vues"]:
+        t.append(f"  synonymes       {rs['vues']} mots travaillés · ", style=GRIS)
+        t.append(f"{rs['sures']} sûrs", style=BLANC)
+        t.append(f" · {rs['dues']} à revoir · {rs['upgrades']} montées de registre\n", style=GRIS)
+    else:
+        t.append("  synonymes       pas encore de partie\n", style=SOMBRE)
+    rl = resume_labog(con)
+    if rl["parties"]:
+        t.append(f"  labog           record {rl['record']} pts", style=BLANC)
+        t.append(f" · couverture moyenne {rl['couverture']:.0%} · {rl['parties']} grille{'s' * (rl['parties'] > 1)}\n",
+                 style=GRIS)
+    else:
+        t.append("  labog           pas encore de grille\n", style=SOMBRE)
     s = scores(con, "entrainement")
     if s:
         t.append(f"  mémoire verbale record {max(s)}", style=BLANC)

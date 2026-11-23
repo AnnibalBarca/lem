@@ -225,11 +225,13 @@ async def test_memoire_entrainement_invite_image(tmp_path):
     app = LemApp(Contexte(chemin))
     async with app.run_test(size=(110, 50)) as pilot:
         await pilot.pause(1.6)
-        await pilot.press("down", "down", "down", "enter", "j")
+        await pilot.press("down", "down", "down", "enter")
+        await pilot.press("down", "down", "enter", "enter", "j")
         e = app.screen
         assert isinstance(e, EcranMemoire)
         while not e.pret:
             await pilot.pause(0.05)
+        assert e.partie.mode == "imagerie"
         premier = e.partie.tour.forme
         await pilot.press("n")                                     # nouveau : l'invite « image ? » attend
         assert e.attente_encodage is not None and "image ?" in str(e.query_one("#detail").render())
@@ -252,7 +254,13 @@ async def test_accueil_touche_chiffre_lance_le_jeu(tmp_path):
         await pilot.pause(1.6)
         await pilot.press("2")                                  # Bombe, sans passer par les réglages
         assert isinstance(app.screen, EcranBombe)
-        await pilot.press("escape")
+        while not app.screen.pret:
+            await pilot.pause(0.05)
+        await pilot.press("escape")                             # 1er Échap : pause
+        assert app.screen.en_pause
+        await pilot.press("escape")                             # 2e Échap : fin de partie (mots comptés)
+        assert app.screen.fini
+        await pilot.press("escape")                             # 3e Échap : retour au menu
         await pilot.press("1")
         assert isinstance(app.screen, EcranCartes)
 
